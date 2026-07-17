@@ -1,0 +1,28 @@
+{
+  "name": "xuanyi-investment-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Pi-based investment research agent migrated from OpenClaw.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node --import tsx src/cli.ts",
+    "start": "node --import tsx src/cli.ts",
+    "briefing": "node --import tsx src/briefing-cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.80.8",
+    "@earendil-works/pi-ai": "0.80.8",
+    "@sinclair/typebox": "0.34.52"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "tsx": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
+  }
+}
