@@ -5,6 +5,8 @@ export interface AppConfig {
   provider: string;
   model: string;
   timezone: string;
+  tavilyMcpEnabled: boolean;
+  tavilyMcpUrl: string;
   tavilyApiKey: string | undefined;
   searchMaxResults: number;
   briefingReportApiUrl: string | undefined;
@@ -16,14 +18,17 @@ export function loadConfig(env?: NodeJS.ProcessEnv): AppConfig {
   if (!env) loadLocalEnv();
   const source = env ?? process.env;
   const searchMaxResults = Number.parseInt(source.SEARCH_MAX_RESULTS?.trim() || "5", 10);
-  if (!Number.isInteger(searchMaxResults) || searchMaxResults < 1 || searchMaxResults > 20) {
-    throw new Error("SEARCH_MAX_RESULTS must be an integer between 1 and 20.");
+  if (!Number.isInteger(searchMaxResults) || searchMaxResults < 5 || searchMaxResults > 20) {
+    throw new Error("SEARCH_MAX_RESULTS must be an integer between 5 and 20 for Tavily MCP.");
   }
+  const tavilyMcpEnabled = booleanValue(source.TAVILY_MCP_ENABLED, true, "TAVILY_MCP_ENABLED");
 
   return {
-    provider: source.PI_PROVIDER?.trim() || "anthropic",
-    model: source.PI_MODEL?.trim() || "claude-sonnet-4-5",
+    provider: source.PI_PROVIDER?.trim() || "deepseek",
+    model: source.PI_MODEL?.trim() || "deepseek-v4-flash",
     timezone: source.APP_TIMEZONE?.trim() || "Asia/Shanghai",
+    tavilyMcpEnabled,
+    tavilyMcpUrl: source.TAVILY_MCP_URL?.trim() || "https://mcp.tavily.com/mcp/",
     tavilyApiKey: optional(source.TAVILY_API_KEY),
     searchMaxResults,
     briefingReportApiUrl: optional(source.BRIEFING_REPORT_API_URL),
@@ -44,4 +49,12 @@ export function loadLocalEnv(): void {
 function optional(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized || undefined;
+}
+
+function booleanValue(value: string | undefined, fallback: boolean, name: string): boolean {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  throw new Error(`${name} must be true or false.`);
 }

@@ -9,3 +9,4 @@ data/reports/*
 !data/reports/.gitkeep
 data/runtime/*
 !data/runtime/.gitkeep
+.idea

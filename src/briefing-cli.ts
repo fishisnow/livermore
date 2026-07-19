@@ -15,6 +15,7 @@ try {
   console.log(`已生成 ${result.task}（${result.mode}），采用 ${result.sourceCount} 条新来源。`);
   console.log(`报告：${path.relative(process.cwd(), result.reportPath)}`);
   console.log(result.delivered ? "已完成上报。" : "未配置上报地址，报告仅保存在本地。");
+  for (const warning of result.warnings) console.warn(`提示：${warning}`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;

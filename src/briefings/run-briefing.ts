@@ -6,9 +6,10 @@ import { reportsDirectory, runtimeDirectory } from "../project-paths.js";
 import { createInvestmentAgent } from "../agent/create-investment-agent.js";
 import { DedupeStore } from "./dedupe-store.js";
 import { deliverBriefing } from "./delivery.js";
+import { collectDirectSources } from "./direct-source-provider.js";
 import { collectLiveSources, loadReplaySources } from "./source-provider.js";
 import { taskDefinitions } from "./task-definitions.js";
-import type { BriefingTask } from "./types.js";
+import type { BriefingTask, SourceItem } from "./types.js";
 
 export interface RunBriefingOptions {
   task: BriefingTask;
@@ -25,6 +26,7 @@ export interface RunBriefingResult {
   reportPath: string;
   sourceCount: number;
   delivered: boolean;
+  warnings: string[];
 }
 
 export async function runBriefing(options: RunBriefingOptions): Promise<RunBriefingResult> {
@@ -35,9 +37,10 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
   const localDate = formatLocal(now, options.config.timezone, "date");
   const localTime = formatLocal(now, options.config.timezone, "time");
 
-  const collected = options.replayPath
-    ? await loadReplaySources(options.replayPath, options.task)
+  const collection = options.replayPath
+    ? { sources: await loadReplaySources(options.replayPath, options.task), warnings: [] }
     : await collectLive(options, definition, now);
+  const collected = collection.sources;
   const store = new DedupeStore(path.join(runtimeDirectory, "reported-news"));
   const sources = await store.unseen(options.task, localDate, collected);
 
@@ -46,6 +49,7 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
     : await generateReport(options, definition.buildPrompt({
         mode,
         nowIso: now.toISOString(),
+        localNow: `${localDate} ${localTime.slice(0, 2)}:${localTime.slice(2)}`,
         timezone: options.config.timezone,
         sources,
       }));
@@ -65,7 +69,7 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
   }
 
   await store.commit(options.task, localDate, sources, now);
-  return { task: options.task, mode, reportPath, sourceCount: sources.length, delivered };
+  return { task: options.task, mode, reportPath, sourceCount: sources.length, delivered, warnings: collection.warnings };
 }
 
 async function collectLive(
@@ -73,10 +77,33 @@ async function collectLive(
   definition: (typeof taskDefinitions)[BriefingTask],
   now: Date,
 ) {
-  if (!options.config.tavilyApiKey) {
-    throw new Error("TAVILY_API_KEY is required for live collection. Add it to the project .env or use --replay.");
+  const warnings: string[] = [];
+  let mcpSources: SourceItem[] = [];
+  if (options.config.tavilyMcpEnabled && options.config.tavilyApiKey) {
+    try {
+      mcpSources = await collectLiveSources(
+        definition,
+        options.config.tavilyMcpUrl,
+        options.config.tavilyApiKey,
+        options.config.searchMaxResults,
+        now,
+      );
+    } catch (error) {
+      warnings.push(`Tavily MCP unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  } else if (!options.config.tavilyMcpEnabled) {
+    warnings.push("Tavily MCP is disabled; using direct web sources only.");
+  } else {
+    warnings.push("TAVILY_API_KEY is not configured; using direct web sources only.");
   }
-  return collectLiveSources(definition, options.config.tavilyApiKey, options.config.searchMaxResults, now);
+
+  const direct = await collectDirectSources(options.task, now);
+  if (direct.failures.length > 0) warnings.push(`Direct source failures: ${direct.failures.join("; ")}`);
+  const sources = [...new Map([...mcpSources, ...direct.sources].map((source) => [source.id, source])).values()];
+  if (sources.length === 0) {
+    throw new Error(`No live sources could be collected. ${warnings.join(" ")}`);
+  }
+  return { sources, warnings };
 }
 
 async function generateReport(options: RunBriefingOptions, prompt: string): Promise<string> {

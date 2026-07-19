@@ -6,7 +6,7 @@
 
 迁移落点：`src/briefings/`。已完成：
 
-- Tavily 结构化检索与来源元数据
+- Tavily MCP 检索，以及配额不可用时的公开财经页面直抓与 Defuddle 正文提取
 - 基于稳定 URL ID 的按日去重存储
 - 自动模式选择、报告落盘和可选 HTTP 上报
 - JSON 离线回放入口与核心单元测试

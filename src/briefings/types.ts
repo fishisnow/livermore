@@ -37,6 +37,7 @@ export interface BriefingTaskDefinition {
 export interface BriefingPromptInput {
   mode: BriefingMode;
   nowIso: string;
+  localNow: string;
   timezone: string;
   sources: SourceItem[];
 }

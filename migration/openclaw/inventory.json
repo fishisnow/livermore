@@ -13,7 +13,7 @@
     { "source": "ai-industry-chain-prompt.md", "target": "src/briefings/task-definitions.ts", "status": "merged" },
     { "source": "memory/reported-news-*.txt", "status": "archive", "reason": "Runtime deduplication state; do not inject into the model." },
     { "source": "memory/2026-03-29.md", "status": "review", "reason": "Review for durable facts before migration." },
-    { "source": "scripts/", "target": "src/briefings/", "status": "rewrite", "reason": "Generation, deduplication and optional HTTP delivery were rewritten; external scheduling remains deployment-owned." },
+    { "source": "scripts/", "target": "src/briefings/", "status": "rewrite", "reason": "Generation, content-level deduplication, Tavily MCP, direct public-page fallback and optional HTTP delivery were rewritten; external scheduling remains deployment-owned." },
     { "source": "tmp/", "status": "reject", "reason": "Ephemeral runtime files." },
     { "source": ".openclaw/", "status": "reject", "reason": "Runtime state; may contain environment-specific identifiers." }
   ]

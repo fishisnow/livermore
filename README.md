@@ -13,7 +13,7 @@
 - 可读取迁移清单和已纳入项目的旧版 prompt 资产
 - 可将研究结果保存到本地 `data/reports/`
 - 可运行“每日市场简报”和“AI 产业链日报”
-- 支持 Tavily 当日检索、结构化离线回放、稳定 URL 去重和可选 HTTP 上报
+- 通过 Tavily Remote MCP 检索，并在配额或网络不可用时自动直抓公开财经页面；同时提供结构化离线回放、内容级去重和可选 HTTP 上报
 - 写文件工具限制在报告目录内，不提供 shell、券商或交易工具
 
 ## 启动
@@ -27,11 +27,11 @@ test -f .env || cp .env.example .env
 npm run dev -- "介绍你的职责，并列出当前可用能力"
 ```
 
-配置统一从项目根目录的 `.env` 读取，不依赖命令启动时所在目录。默认模型为 `anthropic/claude-sonnet-4-5`，可在 `.env` 中切换 `PI_PROVIDER` 和 `PI_MODEL`。
+配置统一从项目根目录的 `.env` 读取，不依赖命令启动时所在目录。默认模型为 `deepseek/deepseek-v4-flash`，使用 Pi 内置的 DeepSeek provider 访问 `https://api.deepseek.com`；在 `.env` 中填写 `DEEPSEEK_API_KEY` 即可。需要更强模型时，可将 `PI_MODEL` 改为 `deepseek-v4-pro`。
 
 ## 运行日报
 
-实时收集需要在 `.env` 中填写 `TAVILY_API_KEY`：
+实时收集优先通过 Tavily MCP 完成，默认连接 `https://mcp.tavily.com/mcp/`。如 Tavily 返回配额错误、网络失败或没有配置 `TAVILY_API_KEY`，工作流会自动改用财联社、金十、Yahoo Finance、东方财富、CNBC 等公开页面，并使用 Defuddle 提取正文。配额长期不可用时可设置 `TAVILY_MCP_ENABLED=false`，续费后再改回 `true`；`TAVILY_MCP_URL` 可切换 MCP 服务：
 
 ```bash
 npm run briefing -- --task market-briefing
@@ -75,7 +75,7 @@ npm test
 
 ## 当前边界
 
-搜索结果是资讯来源，不是交易所实时行情。这个版本还没有独立行情、持仓数据、内置定时任务、飞书投递和长期记忆；模型不能把自身知识当实时数据。调度应由部署环境触发 `npm run briefing`，投递目前只支持可选 HTTP 上报。
+搜索与网页提取结果是公开资讯来源，不是交易所实时行情；页面抓取也可能受站点反爬、动态渲染或结构变化影响。这个版本还没有独立行情、持仓数据、内置定时任务、飞书投递和长期记忆；模型不能把自身知识当实时数据。调度应由部署环境触发 `npm run briefing`，投递目前只支持可选 HTTP 上报。
 
 ## 目录
 
