@@ -1,9 +1,12 @@
 {
-  "name": "xuanyi-investment-agent",
+  "name": "livermore",
   "version": "0.1.0",
   "private": true,
-  "description": "A Pi-based investment research agent migrated from OpenClaw.",
+  "description": "A research-only investment agent with resilient daily market and AI industry briefings.",
   "type": "module",
+  "bin": {
+    "livermore": "bin/livermore.mjs"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -11,6 +14,12 @@
     "dev": "node --import tsx src/cli.ts",
     "start": "node --import tsx src/cli.ts",
     "briefing": "node --import tsx src/briefing-cli.ts",
+    "runs": "node --import tsx src/runs-cli.ts",
+    "notify:test": "node --import tsx src/notification-cli.ts",
+    "scheduler": "node --import tsx src/scheduler-cli.ts",
+    "phoenix": "node --import tsx src/phoenix-cli.ts",
+    "web": "node --import tsx src/web-server.ts",
+    "install:local": "node bin/install.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -18,6 +27,11 @@
     "@earendil-works/pi-agent-core": "0.80.8",
     "@earendil-works/pi-ai": "0.80.8",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.221.0",
+    "@opentelemetry/resources": "^2.10.0",
+    "@opentelemetry/sdk-trace-node": "^2.10.0",
+    "@opentelemetry/semantic-conventions": "^1.43.0",
     "@sinclair/typebox": "0.34.52",
     "defuddle": "^0.19.1",
     "linkedom": "^0.18.13"

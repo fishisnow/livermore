@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Livermore · 本地投资 Agent</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-frame">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">L</span>
+        <div>
+          <strong>Livermore</strong>
+          <span>本地投资 Agent</span>
+        </div>
+      </div>
+      <div class="system-line">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span id="system-status">正在连接本地服务</span>
+        <span class="divider"></span>
+        <span id="clock"></span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="conversation" aria-label="Agent 对话">
+        <div class="conversation-head">
+          <div>
+            <p class="eyebrow">Research session</p>
+            <h1>让证据先说话。</h1>
+          </div>
+          <button class="quiet-button" id="new-session" type="button">新对话</button>
+        </div>
+
+        <div class="messages" id="messages" aria-live="polite">
+          <div class="welcome" id="welcome">
+            <p class="welcome-lead">你可以问今天发生了什么，也可以追问某次任务为什么得出这个结论。</p>
+            <div class="prompt-grid">
+              <button type="button" data-prompt="总结最近一次市场简报的关键结论、来源质量和待验证风险。">复盘最近市场简报</button>
+              <button type="button" data-prompt="查看最近一次 AI 产业链日报，找出可能传导到 A/H 股的投资线索，并区分事实与推断。">寻找 AI 产业链线索</button>
+              <button type="button" data-prompt="检查最近运行的两个任务：哪些成功、哪些有警告，耗时和来源数量如何？">检查任务运行质量</button>
+              <button type="button" data-prompt="列出当前可用的 skills，并说明哪些适合辅助投资研究。">查看可用 Skills</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="tool-activity" id="tool-activity" hidden>
+          <span class="activity-pulse"></span>
+          <span id="tool-label">正在查阅本地资料</span>
+        </div>
+
+        <form class="composer" id="composer">
+          <label for="prompt">向 Livermore 提问</label>
+          <div class="composer-row">
+            <textarea id="prompt" rows="1" maxlength="20000" placeholder="例如：结合今天的市场简报，哪些信号值得明天继续观察？"></textarea>
+            <button id="send" type="submit">
+              <span>发送</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+          </div>
+          <p>回答基于本地任务、已配置 MCP 和 Skills；不构成投资建议。</p>
+        </form>
+      </section>
+
+      <aside class="task-rail" aria-label="任务运行状态">
+        <div class="rail-head">
+          <div>
+            <p class="eyebrow">Task tape</p>
+            <h2>自动研究任务</h2>
+          </div>
+          <button class="icon-button" id="refresh" type="button" aria-label="刷新任务">↻</button>
+        </div>
+
+        <div id="tasks" class="tasks"></div>
+
+        <section class="rail-section">
+          <div class="section-label">
+            <span>最近运行</span>
+            <button id="view-all-runs" type="button">查看全部</button>
+          </div>
+          <div id="recent-runs" class="run-list"></div>
+        </section>
+
+        <section class="rail-section capability-section">
+          <div class="section-label">
+            <span>研究能力</span>
+            <button id="capability-details" type="button">查看能力账本</button>
+          </div>
+          <div class="capabilities" id="capabilities"></div>
+          <a class="trace-link" id="trace-link" href="http://localhost:6006" target="_blank" rel="noreferrer">
+            打开 Trace 观测台 <span aria-hidden="true">↗</span>
+          </a>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <dialog id="run-dialog">
+    <div class="dialog-head">
+      <div>
+        <p class="eyebrow">Run detail</p>
+        <h2 id="dialog-title">任务详情</h2>
+      </div>
+      <button class="icon-button" id="close-dialog" type="button" aria-label="关闭">×</button>
+    </div>
+    <div id="dialog-meta" class="dialog-meta"></div>
+    <div id="dialog-evaluations" class="evaluation-list"></div>
+    <article id="dialog-report" class="report"></article>
+  </dialog>
+
+  <dialog id="capability-dialog" class="capability-dialog">
+    <div class="dialog-head">
+      <div>
+        <p class="eyebrow">Capability ledger</p>
+        <h2>Livermore 能力账本</h2>
+      </div>
+      <button class="icon-button" id="close-capability-dialog" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="capability-ledger-intro">
+      <p>这里只展示 Livermore 运行时真正能访问的能力，不包含 Codex 桌面环境中的全局技能或 MCP。</p>
+      <button id="refresh-capabilities" type="button">重新扫描</button>
+    </div>
+    <div class="capability-ledger">
+      <section>
+        <div class="ledger-title">
+          <div><span>Skills</span><strong id="skill-total">0</strong></div>
+          <p>项目 <code>skills/</code> 目录，调用时按需加载</p>
+        </div>
+        <div id="skill-ledger" class="ledger-list"></div>
+      </section>
+      <section>
+        <div class="ledger-title">
+          <div><span>MCP</span><strong id="mcp-total">0</strong></div>
+          <p>仅统计 Agent 运行时实际配置的 MCP 服务</p>
+        </div>
+        <div id="mcp-ledger" class="ledger-list"></div>
+      </section>
+      <section>
+        <div class="ledger-title">
+          <div><span>数据连接</span><strong id="connection-total">0</strong></div>
+          <p>Skill API 与内置降级数据源，不等同于 MCP</p>
+        </div>
+        <div id="connection-ledger" class="ledger-list"></div>
+      </section>
+      <details class="tool-ledger">
+        <summary>查看 Agent 内置工具 <span id="tool-total">0</span></summary>
+        <div id="tool-ledger" class="ledger-list"></div>
+      </details>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

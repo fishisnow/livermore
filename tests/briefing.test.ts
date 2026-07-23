@@ -1,11 +1,8 @@
-import { mkdtemp, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { DedupeStore } from "../src/briefings/dedupe-store.js";
 import { collectDirectSources, contentSourceId } from "../src/briefings/direct-source-provider.js";
 import { collectLiveSources, parseTavilyToolResult, stableSourceId, type McpSearchClient } from "../src/briefings/source-provider.js";
 import { resolveAiMode, resolveMarketMode } from "../src/briefings/task-definitions.js";
+import { InvestmentDatabase } from "../src/storage/database.js";
 import type { BriefingTaskDefinition, SourceItem } from "../src/briefings/types.js";
 
 describe("briefing modes", () => {
@@ -28,8 +25,13 @@ describe("source identity and deduplication", () => {
   });
 
   it("commits IDs only when explicitly requested", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "xuanyi-dedupe-"));
-    const store = new DedupeStore(directory);
+    const store = new InvestmentDatabase(":memory:");
+    const runId = store.startRun({
+      task: "market-briefing",
+      mode: "pre-market",
+      scheduledAt: "2026-07-16T01:00:00.000Z",
+      idempotencyKey: "test-run",
+    });
     const source: SourceItem = {
       id: "source-1",
       category: "A股",
@@ -39,12 +41,10 @@ describe("source identity and deduplication", () => {
       retrievedAt: "2026-07-16T01:00:00.000Z",
     };
 
-    expect(await store.unseen("market-briefing", "2026-07-16", [source])).toEqual([source]);
-    await store.commit("market-briefing", "2026-07-16", [source], new Date("2026-07-16T01:00:00Z"));
-    expect(await store.unseen("market-briefing", "2026-07-16", [source])).toEqual([]);
-
-    const state = JSON.parse(await readFile(path.join(directory, "2026-07-16-market-briefing.json"), "utf8"));
-    expect(state.sourceIds).toEqual(["source-1"]);
+    expect(store.unseenSources("market-briefing", "2026-07-16", [source])).toEqual([source]);
+    store.commitSources("market-briefing", "2026-07-16", [source], runId);
+    expect(store.unseenSources("market-briefing", "2026-07-16", [source])).toEqual([]);
+    store.close();
   });
 });
 

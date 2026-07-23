@@ -9,37 +9,37 @@ try {
     task: args.task,
     ...(args.at ? { now: new Date(args.at) } : {}),
     ...(args.replay ? { replayPath: path.resolve(args.replay) } : {}),
-    deliver: !args.noDeliver,
+    force: args.force,
     config: loadConfig(),
   });
-  console.log(`已生成 ${result.task}（${result.mode}），采用 ${result.sourceCount} 条新来源。`);
+  console.log(`已生成 ${result.task}（${result.mode}），采用 ${result.sourceCount} 条新来源。运行 ID：${result.runId}`);
+  if (result.traceId) console.log(`Trace ID：${result.traceId}`);
   console.log(`报告：${path.relative(process.cwd(), result.reportPath)}`);
-  console.log(result.delivered ? "已完成上报。" : "未配置上报地址，报告仅保存在本地。");
   for (const warning of result.warnings) console.warn(`提示：${warning}`);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 }
 
-function parseArgs(argv: string[]): { task: BriefingTask; at: string | undefined; replay: string | undefined; noDeliver: boolean } {
+function parseArgs(argv: string[]): { task: BriefingTask; at: string | undefined; replay: string | undefined; force: boolean } {
   let task: BriefingTask | undefined;
   let at: string | undefined;
   let replay: string | undefined;
-  let noDeliver = false;
+  let force = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--task") task = requiredValue(argv, ++index, "--task") as BriefingTask;
     else if (argument === "--at") at = requiredValue(argv, ++index, "--at");
     else if (argument === "--replay") replay = requiredValue(argv, ++index, "--replay");
-    else if (argument === "--no-deliver") noDeliver = true;
+    else if (argument === "--force") force = true;
     else throw new Error(`Unknown argument: ${argument}`);
   }
 
   if (task !== "market-briefing" && task !== "ai-industry-chain") {
-    throw new Error("Usage: npm run briefing -- --task <market-briefing|ai-industry-chain> [--replay file.json] [--at ISO] [--no-deliver]");
+    throw new Error("Usage: npm run briefing -- --task <market-briefing|ai-industry-chain> [--replay file.json] [--at ISO] [--force]");
   }
-  return { task, at, replay, noDeliver };
+  return { task, at, replay, force };
 }
 
 function requiredValue(argv: string[], index: number, flag: string): string {

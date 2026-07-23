@@ -9,4 +9,8 @@ data/reports/*
 !data/reports/.gitkeep
 data/runtime/*
 !data/runtime/.gitkeep
+data/*.db*
+data/phoenix/
+.venv-phoenix/
+.python/
 .idea

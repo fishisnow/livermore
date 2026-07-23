@@ -1,12 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { Agent } from "@earendil-works/pi-agent-core";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { AppConfig } from "../config.js";
 import { systemPromptPath } from "../project-paths.js";
-import { createMigrationTools } from "../tools/migration-tools.js";
 import { createReportTool } from "../tools/report-tool.js";
 
-export async function createInvestmentAgent(config: AppConfig): Promise<Agent> {
+export interface InvestmentAgentOptions {
+  tools?: AgentTool<any>[];
+  systemPromptAppend?: string;
+}
+
+export async function createInvestmentAgent(config: AppConfig, options: InvestmentAgentOptions = {}): Promise<Agent> {
   const models = builtinModels();
   const model = models.getModel(config.provider, config.model);
   if (!model) {
@@ -15,20 +20,24 @@ export async function createInvestmentAgent(config: AppConfig): Promise<Agent> {
     throw new Error(`Unknown Pi model: ${config.provider}/${config.model}.${hint}`);
   }
 
-  const systemPrompt = await readFile(systemPromptPath, "utf8");
+  const systemPrompt = [
+    await readFile(systemPromptPath, "utf8"),
+    options.systemPromptAppend?.trim(),
+  ].filter(Boolean).join("\n\n");
+  const tools = [createReportTool(), ...(options.tools ?? [])];
+  const allowed = new Set(tools.map((tool) => tool.name));
   return new Agent({
     initialState: {
       systemPrompt,
       model,
       thinkingLevel: "medium",
-      tools: [...createMigrationTools(), createReportTool()],
+      tools,
     },
     streamFn: models.streamSimple.bind(models),
     toolExecution: "parallel",
     beforeToolCall: async ({ toolCall }) => {
-      const allowed = new Set(["list_migration_assets", "read_migration_asset", "save_research_report"]);
       if (!allowed.has(toolCall.name)) {
-        return { block: true, reason: `Tool ${toolCall.name} is not allowed by the M0 research-only policy.` };
+        return { block: true, reason: `Tool ${toolCall.name} is not allowed by the research-only policy.` };
       }
       return undefined;
     },

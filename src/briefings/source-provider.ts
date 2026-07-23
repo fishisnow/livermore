@@ -103,7 +103,7 @@ export function parseTavilyToolResult(content: unknown[]): TavilyResult[] {
 }
 
 function createTavilyMcpClient(endpoint: URL): McpSearchClient {
-  const client = new Client({ name: "xuanyi-investment-agent", version: "0.1.0" }, { capabilities: {} });
+  const client = new Client({ name: "livermore", version: "0.1.0" }, { capabilities: {} });
   const transport = new StreamableHTTPClientTransport(endpoint);
   return {
     connect: () => client.connect(transport as never),
