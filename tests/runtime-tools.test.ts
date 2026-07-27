@@ -27,6 +27,7 @@ describe("interactive Agent runtime tools", () => {
         cacheWriteTokens: 0,
         reasoningTokens: 10,
         cost: 0.002,
+        costCurrency: "CNY",
       },
     });
 

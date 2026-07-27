@@ -5,6 +5,11 @@ import type { Context } from "@opentelemetry/api";
 import { createInvestmentAgent } from "../agent/create-investment-agent.js";
 import type { AppConfig } from "../config.js";
 import type { IwencaiQueryResult } from "../market/iwencai-client.js";
+import {
+  findNormalizedQuote,
+  normalizeIwencaiResults,
+  type NormalizedMarketQuote,
+} from "../market/iwencai-normalizer.js";
 import { MessageCenter } from "../notifications/message-center.js";
 import { observeAgent, Telemetry } from "../observability/telemetry.js";
 import { databasePath, reportsDirectory } from "../project-paths.js";
@@ -70,9 +75,9 @@ interface AssessedPosition {
   shouldAlert: boolean;
 }
 
-const zeroUsage = (): RunUsage => ({
+const zeroUsage = (costCurrency: string): RunUsage => ({
   inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
-  cacheWriteTokens: 0, reasoningTokens: 0, cost: 0,
+  cacheWriteTokens: 0, reasoningTokens: 0, cost: 0, costCurrency,
 });
 
 export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Promise<PortfolioRiskResult> {
@@ -115,7 +120,7 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
         ? {
           analysis: "当前没有持仓，本轮未调用行情 Skill 或模型。",
           marketResults: [],
-          usage: zeroUsage(),
+          usage: zeroUsage(options.config.modelCostCurrency),
           skillReadCount: 0,
           marketQueryCount: 0,
         }
@@ -138,15 +143,29 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
             "livermore.market.query_count": result.marketQueryCount,
             "gen_ai.usage.input_tokens": result.usage.inputTokens,
             "gen_ai.usage.output_tokens": result.usage.outputTokens,
-            "gen_ai.usage.cost": result.usage.cost,
+            ...(result.usage.costCurrency === "USD"
+              ? { "gen_ai.usage.cost": result.usage.cost }
+              : {}),
+            "livermore.cost.amount": result.usage.cost,
+            "livermore.cost.currency": result.usage.costCurrency,
             ...(telemetry.captureContent ? {
               "output.value": truncateTraceContent(result.analysis),
-              "output.mime_type": "text/markdown",
+              "output.mime_type": "text/plain",
             } : {}),
           });
           return result;
         });
-      const marketRows = agentResult.marketResults.flatMap((result) => result.datas ?? []);
+      const rawMarketRowCount = agentResult.marketResults
+        .reduce((count, result) => count + (result.datas?.length ?? 0), 0);
+      const marketQuotes = await telemetry.withSpan("market.normalize", {
+        "openinference.span.kind": "CHAIN",
+        "livermore.market.raw_row_count": rawMarketRowCount,
+      }, async (span) => {
+        const normalized = normalizeIwencaiResults(agentResult.marketResults);
+        span.setAttribute("livermore.market.normalized_quote_count", normalized.length);
+        return normalized;
+      });
+      rootSpan.setAttribute("livermore.market.normalized_quote_count", marketQuotes.length);
       const assessed: AssessedPosition[] = [];
       for (const position of positions) {
         assessed.push(await telemetry.withSpan("portfolio.position_check", {
@@ -154,7 +173,7 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
           "livermore.position.id": position.id,
           "livermore.position.symbol": position.symbol,
         }, async (span) => {
-          const value = assessPosition(position, marketRows);
+          const value = assessPosition(position, marketQuotes);
           span.setAttributes({
             "livermore.risk.severity": value.severity,
             "livermore.risk.signal_count": value.signals.length,
@@ -247,22 +266,22 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
 
 function assessPosition(
   position: PortfolioPosition,
-  rows: Array<Record<string, unknown>>,
+  quotes: NormalizedMarketQuote[],
 ): Omit<AssessedPosition, "position" | "checkId" | "shouldAlert"> {
-  const item = selectMarketRow(rows, position.symbol);
-  if (!item) {
+  const quote = findNormalizedQuote(quotes, position.symbol);
+  if (!quote) {
     return {
       name: position.symbol,
       severity: "warning",
       signals: ["Agent 已调用同花顺问财，但未返回该持仓的行情数据"],
-      rawData: { symbol: position.symbol, availableRows: rows.length },
+      rawData: {
+        requestedSymbol: position.symbol,
+        normalizedQuotes: quotes.map((item) => item.symbol),
+      },
     };
   }
-  const currentPrice = numericField(item, ["最新价"]);
-  const dayChangePct = numericField(item, ["最新涨跌幅", "涨跌幅"]);
-  const mainNetInflow = numericField(item, ["主力净流入"]);
-  const rsi = numericField(item, ["RSI"]);
-  const name = textField(item, ["股票简称", "指数简称", "证券简称", "简称"]) ?? position.symbol;
+  const { currentPrice, dayChangePct, mainNetInflow, rsi } = quote;
+  const name = quote.name ?? position.symbol;
   const pnlPct = currentPrice === undefined
     ? undefined
     : roundPercentage(((currentPrice - position.costBasis) / position.costBasis) * 100);
@@ -281,7 +300,7 @@ function assessPosition(
     ...(mainNetInflow === undefined ? {} : { mainNetInflow }),
     severity: risk.severity,
     signals: risk.signals,
-    rawData: item,
+    rawData: quote,
   };
 }
 
@@ -418,31 +437,6 @@ function shouldSendAlert(
 
 function severityRank(value: Severity): number {
   return ({ normal: 0, warning: 1, critical: 2 })[value];
-}
-
-function selectMarketRow(rows: Array<Record<string, unknown>>, symbol: string): Record<string, unknown> | undefined {
-  const normalized = symbol.replace(/\.(SH|SZ|BJ|HK)$/i, "").toUpperCase();
-  return rows.find((row) => Object.entries(row).some(([key, value]) =>
-    /代码/.test(key) && String(value).toUpperCase().replace(/\.(SH|SZ|BJ|HK)$/i, "") === normalized,
-  )) ?? (rows.length === 1 ? rows[0] : undefined);
-}
-
-function numericField(row: Record<string, unknown>, names: string[]): number | undefined {
-  for (const name of names) {
-    const entry = Object.entries(row).find(([key]) => key.toUpperCase().includes(name.toUpperCase()));
-    if (!entry) continue;
-    const parsed = Number(String(entry[1]).replaceAll(",", "").replace("%", "").trim());
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return undefined;
-}
-
-function textField(row: Record<string, unknown>, names: string[]): string | undefined {
-  for (const name of names) {
-    const entry = Object.entries(row).find(([key]) => key.includes(name));
-    if (entry && entry[1] !== null && entry[1] !== undefined) return String(entry[1]);
-  }
-  return undefined;
 }
 
 async function persistReport(

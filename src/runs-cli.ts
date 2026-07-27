@@ -22,8 +22,8 @@ try {
       startedAt: run.startedAt,
       durationMs: run.durationMs,
       sources: run.sourceCount,
-      tokens: run.inputTokens + run.outputTokens,
-      cost: run.cost.toFixed(6),
+      tokens: run.inputTokens + run.outputTokens + run.cacheReadTokens + run.cacheWriteTokens,
+      cost: `${run.costCurrency} ${run.cost.toFixed(6)}`,
       traceId: run.traceId?.slice(0, 12) ?? "-",
     })));
   }

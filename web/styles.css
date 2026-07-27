@@ -474,11 +474,56 @@ h2 { font-size: 23px; letter-spacing: -0.02em; }
 }
 .capability-section .section-label button:hover { border-bottom-color: var(--jade); }
 
+.trace-lookup {
+  margin-top: 15px;
+  padding: 13px 0 15px;
+  border-top: 1px solid var(--line);
+}
+.trace-lookup label {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 600;
+}
+.trace-lookup div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.trace-lookup input {
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-right: 0;
+  border-radius: 8px 0 0 8px;
+  color: var(--ink);
+  background: white;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.trace-lookup input:focus-visible {
+  position: relative;
+  outline: 3px solid rgba(22, 115, 111, 0.18);
+  border-color: var(--jade);
+}
+.trace-lookup button {
+  height: 36px;
+  padding: 0 13px;
+  border: 1px solid var(--ink);
+  border-radius: 0 8px 8px 0;
+  color: white;
+  background: var(--ink);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+}
+.trace-lookup button:hover { background: var(--jade); border-color: var(--jade); }
+
 .trace-link {
   display: flex;
   justify-content: space-between;
-  margin-top: 15px;
-  padding: 12px 0;
+  padding: 11px 0 0;
   border-top: 1px solid var(--line);
   color: var(--ink);
   font-size: 11px;
@@ -498,7 +543,19 @@ dialog {
 dialog::backdrop { background: rgba(18, 34, 44, 0.48); backdrop-filter: blur(4px); }
 .dialog-head { position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center; padding: 22px 28px; border-bottom: 1px solid var(--line); background: white; z-index: 2; }
 .dialog-meta { display: flex; flex-wrap: wrap; gap: 9px; padding: 18px 28px 8px; }
-.dialog-meta span { padding: 6px 9px; border-radius: 6px; background: var(--paper); font-family: var(--mono); font-size: 10px; }
+.dialog-meta span, .dialog-meta a {
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--paper);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.dialog-meta a {
+  color: var(--jade);
+  background: var(--jade-soft);
+  text-decoration: none;
+}
+.dialog-meta a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .evaluation-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px 28px; }
 .evaluation { padding: 11px; border: 1px solid var(--line); border-radius: 8px; font-size: 11px; }
 .evaluation strong { display: block; margin-bottom: 4px; font-family: var(--mono); font-size: 10px; }

@@ -19,7 +19,7 @@ describe("task run ledger", () => {
       warningCount: 1,
       usage: {
         inputTokens: 100, outputTokens: 50, cacheReadTokens: 20,
-        cacheWriteTokens: 0, reasoningTokens: 5, cost: 0.0012,
+        cacheWriteTokens: 0, reasoningTokens: 5, cost: 0.0012, costCurrency: "CNY",
       },
     });
 
@@ -30,6 +30,7 @@ describe("task run ledger", () => {
       inputTokens: 100,
       outputTokens: 50,
       cost: 0.0012,
+      costCurrency: "CNY",
     });
     database.close();
   });
@@ -45,7 +46,10 @@ describe("task run ledger", () => {
     const runId = database.startRun(input);
     database.succeedRun({
       runId, reportPath: "/tmp/report.md", sourceCount: 0, warningCount: 0,
-      usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, cost: 0 },
+      usage: {
+        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+        reasoningTokens: 0, cost: 0, costCurrency: "USD",
+      },
     });
     expect(() => database.startRun(input)).toThrow("already exists");
     expect(database.startRun({ ...input, force: true })).toBeTypeOf("string");

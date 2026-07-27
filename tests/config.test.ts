@@ -15,6 +15,9 @@ describe("loadConfig", () => {
       searchMaxResults: 5,
       tracingEnabled: true,
       traceContentEnabled: true,
+      modelCostInputPerMillion: undefined,
+      modelCostOutputPerMillion: undefined,
+      modelCostCurrency: "USD",
       otlpTraceEndpoint: "http://localhost:6006/v1/traces",
       phoenixUiUrl: "http://localhost:6006",
       webPort: 4310,
@@ -38,6 +41,9 @@ describe("loadConfig", () => {
       searchMaxResults: 5,
       tracingEnabled: true,
       traceContentEnabled: true,
+      modelCostInputPerMillion: undefined,
+      modelCostOutputPerMillion: undefined,
+      modelCostCurrency: "USD",
       otlpTraceEndpoint: "http://localhost:6006/v1/traces",
       phoenixUiUrl: "http://localhost:6006",
       webPort: 4310,
@@ -66,5 +72,27 @@ describe("loadConfig", () => {
   it("allows local Trace content capture to be disabled", () => {
     expect(loadConfig({ TRACE_CONTENT_ENABLED: "false" }).traceContentEnabled).toBe(false);
     expect(() => loadConfig({ TRACE_CONTENT_ENABLED: "sometimes" })).toThrow("must be true or false");
+  });
+
+  it("accepts model pricing in a configured currency", () => {
+    const config = loadConfig({
+      MODEL_COST_INPUT_PER_MILLION: "0.025",
+      MODEL_COST_OUTPUT_PER_MILLION: "3",
+      MODEL_COST_CURRENCY: "cny",
+    });
+    expect(config).toMatchObject({
+      modelCostInputPerMillion: 0.025,
+      modelCostOutputPerMillion: 3,
+      modelCostCurrency: "CNY",
+    });
+  });
+
+  it("requires complete and valid model pricing", () => {
+    expect(() => loadConfig({ MODEL_COST_INPUT_PER_MILLION: "1" })).toThrow("must be configured together");
+    expect(() => loadConfig({
+      MODEL_COST_INPUT_PER_MILLION: "-1",
+      MODEL_COST_OUTPUT_PER_MILLION: "2",
+    })).toThrow("non-negative");
+    expect(() => loadConfig({ MODEL_COST_CURRENCY: "人民币" })).toThrow("three-letter");
   });
 });

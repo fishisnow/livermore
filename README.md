@@ -66,6 +66,9 @@ test -f .env || cp .env.example .env
 DEEPSEEK_API_KEY=your-key
 PI_PROVIDER=deepseek
 PI_MODEL=deepseek-v4-flash
+MODEL_COST_INPUT_PER_MILLION=0.025
+MODEL_COST_OUTPUT_PER_MILLION=3
+MODEL_COST_CURRENCY=CNY
 ```
 
 安装本地 Phoenix：
@@ -110,7 +113,7 @@ npm run scheduler -- install
 
 ## 持仓风险规则
 
-持仓完全由用户在 Agent Web 中手工维护，Livermore 不读取券商账户，也不会下单。每次巡检启动一个短生命周期 Pi Agent：Agent 先读取项目安装的 `hithink-market-query` Skill，再调用 `query_iwencai_market` 获取最新价、当日涨跌、主力净流入、RSI 和 MACD，并生成辅助研判。代码从工具原始结果重新提取行情、计算相对买入成本的盈亏并执行硬风险规则，模型不能覆盖最终等级。
+持仓完全由用户在 Agent Web 中手工维护，Livermore 不读取券商账户，也不会下单。每次巡检启动一个短生命周期 Pi Agent：Agent 先读取项目安装的 `hithink-market-query` Skill，再调用 `query_iwencai_market` 获取最新价、当日涨跌、主力净流入、RSI 和 MACD，并生成辅助研判。工具结果先经过行情适配层：统一 A 股、ETF、港股代码，映射同花顺动态中文列名，并合并同一标的的多次查询结果；确定性代码随后只读取稳定字段，计算相对买入成本的盈亏并执行硬风险规则，模型不能覆盖最终等级。标准化结果仍保留原始行、查询语句和问财 Trace ID，便于审计。
 
 - 警告：持仓亏损达到 5%、当日跌幅达到 4%、下跌且主力净流出、RSI 达到 80，或行情查询失败。
 - 严重：持仓亏损达到 10%，或当日跌幅达到 7%。
@@ -193,6 +196,9 @@ npm run briefing -- \
 | `DEEPSEEK_API_KEY` | 空 | DeepSeek API 密钥 |
 | `PI_PROVIDER` | `deepseek` | Pi 模型 provider |
 | `PI_MODEL` | `deepseek-v4-flash` | 模型 ID |
+| `MODEL_COST_INPUT_PER_MILLION` | 未设置 | 每 100 万输入 Token 的成本；缓存读写 Token 也按输入价格计算 |
+| `MODEL_COST_OUTPUT_PER_MILLION` | 未设置 | 每 100 万输出 Token 的成本 |
+| `MODEL_COST_CURRENCY` | `USD` | 成本币种，例如 `CNY` 或 `USD` |
 | `APP_TIMEZONE` | `Asia/Shanghai` | 日报模式与日期时区 |
 | `TAVILY_MCP_ENABLED` | `true` | 是否启用 Tavily MCP |
 | `TAVILY_MCP_URL` | Tavily Remote MCP | MCP 地址 |
@@ -209,6 +215,9 @@ npm run briefing -- \
 | `NOTIFY_ON_SUCCESS` | `true` | 是否汇报成功任务 |
 
 配置始终从项目根目录 `.env` 加载，不依赖启动目录。
+当输入、输出价格均有配置时，运行成本按
+`(输入 Token（含缓存）× 输入单价 + 输出 Token × 输出单价) / 1,000,000`
+计算；未配置时沿用 Pi 模型注册表返回的成本。
 
 ## 数据目录
 

@@ -17,13 +17,14 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AppConfig } from "../config.js";
 import type { RunUsage } from "../storage/database.js";
 
-const emptyUsage = (): RunUsage => ({
+const emptyUsage = (costCurrency: string): RunUsage => ({
   inputTokens: 0,
   outputTokens: 0,
   cacheReadTokens: 0,
   cacheWriteTokens: 0,
   reasoningTokens: 0,
   cost: 0,
+  costCurrency,
 });
 
 export class Telemetry {
@@ -32,10 +33,27 @@ export class Telemetry {
     readonly captureContent: boolean,
     private readonly provider: NodeTracerProvider | undefined,
     readonly tracer: Tracer,
+    readonly costCurrency: string,
+    private readonly customCostRates: { inputPerMillion: number; outputPerMillion: number } | undefined,
   ) {}
 
   static create(config: AppConfig, spanExporter?: SpanExporter): Telemetry {
-    if (!config.tracingEnabled) return new Telemetry(false, false, undefined, trace.getTracer("livermore"));
+    const customCostRates = config.modelCostInputPerMillion === undefined
+      ? undefined
+      : {
+        inputPerMillion: config.modelCostInputPerMillion,
+        outputPerMillion: config.modelCostOutputPerMillion!,
+      };
+    if (!config.tracingEnabled) {
+      return new Telemetry(
+        false,
+        false,
+        undefined,
+        trace.getTracer("livermore"),
+        config.modelCostCurrency,
+        customCostRates,
+      );
+    }
     const exporter = spanExporter ?? new OTLPTraceExporter({ url: config.otlpTraceEndpoint, timeoutMillis: 5_000 });
     const provider = new NodeTracerProvider({
       resource: resourceFromAttributes({
@@ -47,7 +65,23 @@ export class Telemetry {
       spanProcessors: [new BatchSpanProcessor(exporter, { scheduledDelayMillis: 500, exportTimeoutMillis: 5_000 })],
     });
     provider.register();
-    return new Telemetry(true, config.traceContentEnabled, provider, provider.getTracer("livermore-agent", "0.1.0"));
+    return new Telemetry(
+      true,
+      config.traceContentEnabled,
+      provider,
+      provider.getTracer("livermore-agent", "0.1.0"),
+      config.modelCostCurrency,
+      customCostRates,
+    );
+  }
+
+  calculateModelCost(usage: AssistantMessage["usage"]): number {
+    if (!this.customCostRates) return usage.cost.total;
+    const inputTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+    return (
+      inputTokens * this.customCostRates.inputPerMillion
+      + usage.output * this.customCostRates.outputPerMillion
+    ) / 1_000_000;
   }
 
   async withSpan<T>(name: string, attributes: Attributes, fn: (span: Span, activeContext: Context) => Promise<T>): Promise<T> {
@@ -98,8 +132,7 @@ export function observeAgent(
   telemetry: Telemetry,
   parentContext: Context,
 ): { usage: RunUsage; unsubscribe: () => void } {
-  const result = { usage: emptyUsage() };
-  if (!telemetry.enabled) return { ...result, unsubscribe: () => {} };
+  const result = { usage: emptyUsage(telemetry.costCurrency) };
   let turnSpan: Span | undefined;
   let modelSpan: Span | undefined;
   let turnContext = parentContext;
@@ -112,6 +145,7 @@ export function observeAgent(
 
   function handleAgentEvent(event: AgentEvent): void {
     if (event.type === "turn_start") {
+      if (!telemetry.enabled) return;
       turnSpan = telemetry.tracer.startSpan("agent.turn", {
         attributes: {
           "openinference.span.kind": "AGENT",
@@ -120,6 +154,7 @@ export function observeAgent(
       }, parentContext);
       turnContext = trace.setSpan(parentContext, turnSpan);
     } else if (event.type === "message_start" && event.message.role === "assistant") {
+      if (!telemetry.enabled) return;
       modelSpan = telemetry.tracer.startSpan("gen_ai.chat", {
         attributes: {
           "openinference.span.kind": "LLM",
@@ -133,6 +168,7 @@ export function observeAgent(
     } else if (event.type === "message_end" && event.message.role === "assistant") {
       finishModelSpan(event.message);
     } else if (event.type === "tool_execution_start") {
+      if (!telemetry.enabled) return;
       const span = telemetry.tracer.startSpan(`tool.${event.toolName}`, {
         attributes: {
           "openinference.span.kind": "TOOL",
@@ -172,7 +208,8 @@ export function observeAgent(
     result.usage.cacheReadTokens += usage.cacheRead;
     result.usage.cacheWriteTokens += usage.cacheWrite;
     result.usage.reasoningTokens += usage.reasoning ?? 0;
-    result.usage.cost += usage.cost.total;
+    const modelCost = telemetry.calculateModelCost(usage);
+    result.usage.cost += modelCost;
     if (!modelSpan) return;
     modelSpan.setAttributes({
       "gen_ai.provider.name": message.provider,
@@ -184,7 +221,9 @@ export function observeAgent(
       "gen_ai.usage.cache_read_tokens": usage.cacheRead,
       "gen_ai.usage.cache_write_tokens": usage.cacheWrite,
       "gen_ai.usage.reasoning_tokens": usage.reasoning ?? 0,
-      "gen_ai.usage.cost": usage.cost.total,
+      ...(telemetry.costCurrency === "USD" ? { "gen_ai.usage.cost": modelCost } : {}),
+      "livermore.cost.amount": modelCost,
+      "livermore.cost.currency": telemetry.costCurrency,
       "llm.token_count.prompt": usage.input,
       "llm.token_count.completion": usage.output,
       "llm.token_count.total": usage.totalTokens,

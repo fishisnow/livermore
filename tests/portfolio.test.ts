@@ -120,10 +120,14 @@ describe("portfolio risk policy", () => {
             datas: [{
               股票代码: "000001.SZ",
               股票简称: "平安银行",
-              最新价: "10.80",
-              涨跌幅: "-4.50%",
-              主力净流入: "-100000",
-              RSI: "35",
+              "收盘价:不复权[20260724]": "10.80",
+              "涨跌幅:前复权[20260724]": "-4.50%",
+              "主力资金流向[20260724]": "-100000",
+            }],
+          }, {
+            datas: [{
+              股票代码: "000001.SZ",
+              "rsi[20260724]": "35",
             }],
           }],
           usage: {
@@ -133,6 +137,7 @@ describe("portfolio risk policy", () => {
             cacheWriteTokens: 0,
             reasoningTokens: 5,
             cost: 0.002,
+            costCurrency: "CNY",
           },
           skillReadCount: 1,
           marketQueryCount: 1,
@@ -144,6 +149,7 @@ describe("portfolio risk policy", () => {
         inputTokens: 120,
         outputTokens: 40,
         cost: 0.002,
+        costCurrency: "CNY",
       });
       expect(database.listPositions()[0]).toMatchObject({
         latestName: "平安银行",

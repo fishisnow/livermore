@@ -57,7 +57,7 @@ flowchart LR
 
 模型不自主浏览网页。采集结果先被归一化为 `SourceItem`，提示词明确将网页视作不可信数据，Agent 只负责基于证据综合和表达。
 
-持仓巡检的 Agent 只开放 `read_skill` 与 `query_iwencai_market`。它必须先读取 `hithink-market-query`，再查询本次持仓并生成解释；工具原始行情由外层工作流捕获，盈亏和报警等级由确定性代码重新计算。这样既保留 Agent 的 Skill 驱动能力，也避免模型决定止损、伪造价格或降低风险等级。
+持仓巡检的 Agent 只开放 `read_skill` 与 `query_iwencai_market`。它必须先读取 `hithink-market-query`，再查询本次持仓并生成解释；工具原始行情由外层工作流捕获，经 `Iwencai → NormalizedMarketQuote` 适配层统一证券代码和字段别名，并按标的合并多次查询结果。盈亏和报警等级只读取标准化对象，由确定性代码重新计算。每个标准化对象保留原始行、查询语句和问财 Trace ID，既保留 Agent 的 Skill 驱动能力和审计证据，也避免模型决定止损、伪造价格或降低风险等级。
 
 ## 4. 运行事务与幂等
 
@@ -155,6 +155,7 @@ portfolio.risk_check
 │       ├── gen_ai.chat
 │       ├── tool.read_skill
 │       └── tool.query_iwencai_market
+├── market.normalize
 ├── portfolio.position_check
 └── portfolio.alert（按需）
 ```
@@ -231,13 +232,13 @@ Phoenix 安装在项目独立的 `.venv-phoenix/`，由 `launchd` 登录时启�
 | Phoenix 未启动 | Trace flush 提示，业务任务继续 |
 | 飞书或企业微信失败 | 保存失败投递记录，任务保持原状态 |
 | 重复调度 | 幂等检查拒绝重复成功运行 |
-| 持仓行情缺失 | 保存 warning 快照并通过消息中心提示人工复核 |
+| 持仓行情缺失 | 标准化与多结果合并后仍无匹配行情时，保存 warning 快照并提示人工复核 |
 | 进程崩溃遗留锁 | 锁过期后可重新执行 |
 
 ## 12. 后续阶段
 
 1. 在现有持仓模型上增加组合级风险预算、自选股和关注事件。
-2. 接入结构化行情 Provider，定义来源质量等级与时效 SLA。
+2. 为标准化行情层增加来源质量等级、交易日期与时效 SLA。
 3. 增加任务缺失、连续失败和来源异常的本地健康巡检。
 4. 增加报警规则、确认状态、冷却期和误报反馈。
 5. 建立报告黄金集、跨版本回放和人工评分面板。

@@ -33,6 +33,8 @@ const elements = {
   toolLedger: document.querySelector("#tool-ledger"),
   toast: document.querySelector("#toast"),
   traceLink: document.querySelector("#trace-link"),
+  traceLookup: document.querySelector("#trace-lookup"),
+  traceId: document.querySelector("#trace-id"),
 };
 
 document.querySelector("#clock").textContent = new Intl.DateTimeFormat("zh-CN", {
@@ -78,6 +80,7 @@ document.querySelector("#run-portfolio-check").addEventListener("click", runPort
 document.querySelector("#capability-details").addEventListener("click", () => openCapabilities(true));
 document.querySelector("#close-capability-dialog").addEventListener("click", () => elements.capabilityDialog.close());
 document.querySelector("#refresh-capabilities").addEventListener("click", () => openCapabilities(true));
+elements.traceLookup.addEventListener("submit", openTraceById);
 
 loadDashboard();
 setInterval(loadDashboard, 12_000);
@@ -483,15 +486,20 @@ async function openRun(id) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const run = await response.json();
     elements.dialogTitle.textContent = `${taskShortName(run.task)} · ${modeLabel(run.mode)}`;
-    elements.dialogMeta.innerHTML = [
+    const metadata = [
       `状态 ${statusLabel(run.status)}`,
       `运行 ${formatDate(run.startedAt)}`,
       `耗时 ${run.durationMs == null ? "—" : formatDuration(run.durationMs)}`,
       `来源 ${run.sourceCount}`,
-      `Token ${run.inputTokens + run.outputTokens}`,
-      `成本 $${Number(run.cost).toFixed(6)}`,
-      run.traceId ? `Trace ${run.traceId.slice(0, 12)}` : "无 Trace",
-    ].map((item) => `<span>${escapeHtml(item)}</span>`).join("");
+      `Token ${run.inputTokens + run.outputTokens + run.cacheReadTokens + run.cacheWriteTokens}`,
+      `成本 ${formatCost(run.cost, run.costCurrency)}`,
+    ];
+    elements.dialogMeta.innerHTML = metadata
+      .map((item) => `<span>${escapeHtml(item)}</span>`)
+      .join("")
+      + (run.traceId
+        ? `<a href="${escapeHtml(traceUrl(run.traceId))}" target="_blank" rel="noreferrer">Trace ${escapeHtml(run.traceId.slice(0, 12))} ↗</a>`
+        : "<span>无 Trace</span>");
     elements.dialogEvaluations.innerHTML = run.evaluations.map((evaluation) => `
       <div class="evaluation">
         <strong>${escapeHtml(evaluation.evaluator)} · ${escapeHtml(evaluation.label)}</strong>
@@ -505,6 +513,23 @@ async function openRun(id) {
     elements.dialogTitle.textContent = "任务读取失败";
     elements.dialogReport.textContent = error.message;
   }
+}
+
+function openTraceById(event) {
+  event.preventDefault();
+  const traceId = elements.traceId.value.trim().replace(/^0x/i, "");
+  if (!/^[a-f0-9]{32}$/i.test(traceId)) {
+    showToast("Trace ID 应为 32 位十六进制字符");
+    elements.traceId.focus();
+    return;
+  }
+  const opened = window.open(traceUrl(traceId), "_blank", "noopener,noreferrer");
+  if (!opened) window.location.assign(traceUrl(traceId));
+}
+
+function traceUrl(traceId) {
+  const phoenixUrl = state.dashboard?.agent?.phoenixUrl || "http://localhost:6006";
+  return `${phoenixUrl.replace(/\/+$/, "")}/redirects/traces/${encodeURIComponent(traceId)}`;
 }
 
 function parseSse(block) {
@@ -707,6 +732,18 @@ function formatDate(value) {
   return new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
   }).format(new Date(value));
+}
+
+function formatCost(value, currency = "USD") {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  return new Intl.NumberFormat("zh-CN", {
+    style: "currency",
+    currency,
+    currencyDisplay: "narrowSymbol",
+    minimumFractionDigits: 6,
+    maximumFractionDigits: 6,
+  }).format(amount);
 }
 
 function relativeTime(value) {

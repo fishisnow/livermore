@@ -37,9 +37,9 @@ export interface RunBriefingResult {
   evaluations: EvaluationResult[];
 }
 
-const zeroUsage = (): RunUsage => ({
+const zeroUsage = (costCurrency: string): RunUsage => ({
   inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
-  cacheWriteTokens: 0, reasoningTokens: 0, cost: 0,
+  cacheWriteTokens: 0, reasoningTokens: 0, cost: 0, costCurrency,
 });
 
 export async function runBriefing(options: RunBriefingOptions): Promise<RunBriefingResult> {
@@ -109,7 +109,10 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
       });
 
       const generated = sources.length === 0
-        ? { content: emptyReport(options.task, mode, localDate, localTime), usage: zeroUsage() }
+        ? {
+          content: emptyReport(options.task, mode, localDate, localTime),
+          usage: zeroUsage(options.config.modelCostCurrency),
+        }
         : await telemetry.withSpan("agent.run", {
           "openinference.span.kind": "AGENT",
           "livermore.task": options.task,

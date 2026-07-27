@@ -95,6 +95,22 @@
             <button id="capability-details" type="button">查看能力账本</button>
           </div>
           <div class="capabilities" id="capabilities"></div>
+          <form class="trace-lookup" id="trace-lookup">
+            <label for="trace-id">按 Trace ID 定位</label>
+            <div>
+              <input
+                id="trace-id"
+                name="traceId"
+                inputmode="text"
+                autocomplete="off"
+                spellcheck="false"
+                maxlength="34"
+                placeholder="粘贴 32 位 Trace ID"
+                required
+              >
+              <button type="submit">打开</button>
+            </div>
+          </form>
           <a class="trace-link" id="trace-link" href="http://localhost:6006" target="_blank" rel="noreferrer">
             打开 Trace 观测台 <span aria-hidden="true">↗</span>
           </a>

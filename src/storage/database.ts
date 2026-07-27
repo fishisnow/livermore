@@ -22,6 +22,7 @@ export interface RunUsage {
   cacheWriteTokens: number;
   reasoningTokens: number;
   cost: number;
+  costCurrency: string;
 }
 
 export interface RunRecord {
@@ -44,6 +45,7 @@ export interface RunRecord {
   cacheWriteTokens: number;
   reasoningTokens: number;
   cost: number;
+  costCurrency: string;
 }
 
 export interface RunEvaluation {
@@ -133,13 +135,13 @@ export class InvestmentDatabase {
       UPDATE task_runs SET status = 'succeeded', finished_at = ?,
         duration_ms = CAST((julianday(?) - julianday(started_at)) * 86400000 AS INTEGER),
         report_path = ?, source_count = ?, warning_count = ?, input_tokens = ?, output_tokens = ?,
-        cache_read_tokens = ?, cache_write_tokens = ?, reasoning_tokens = ?, cost = ?
+        cache_read_tokens = ?, cache_write_tokens = ?, reasoning_tokens = ?, cost = ?, cost_currency = ?
       WHERE id = ?
     `).run(
       new Date().toISOString(), new Date().toISOString(), input.reportPath, input.sourceCount,
       input.warningCount, input.usage.inputTokens, input.usage.outputTokens,
       input.usage.cacheReadTokens, input.usage.cacheWriteTokens, input.usage.reasoningTokens,
-      input.usage.cost, input.runId,
+      input.usage.cost, input.usage.costCurrency, input.runId,
     );
   }
 
@@ -359,7 +361,8 @@ export class InvestmentDatabase {
         warning_count INTEGER NOT NULL DEFAULT 0, duration_ms INTEGER, error_message TEXT,
         input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
         cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-        reasoning_tokens INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0
+        reasoning_tokens INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0,
+        cost_currency TEXT NOT NULL DEFAULT 'USD'
       );
       CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(task, started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_task_runs_key_status ON task_runs(idempotency_key, status);
@@ -411,6 +414,10 @@ export class InvestmentDatabase {
       CREATE INDEX IF NOT EXISTS idx_position_risk_latest
         ON position_risk_checks(position_id, checked_at DESC);
     `);
+    const runColumns = this.db.prepare("PRAGMA table_info(task_runs)").all() as Array<{ name: string }>;
+    if (!runColumns.some((column) => column.name === "cost_currency")) {
+      this.db.exec("ALTER TABLE task_runs ADD COLUMN cost_currency TEXT NOT NULL DEFAULT 'USD'");
+    }
   }
 }
 
@@ -456,5 +463,8 @@ function mapRunRecord(row: unknown): RunRecord {
     inputTokens: Number(value.input_tokens), outputTokens: Number(value.output_tokens),
     cacheReadTokens: Number(value.cache_read_tokens), cacheWriteTokens: Number(value.cache_write_tokens),
     reasoningTokens: Number(value.reasoning_tokens), cost: Number(value.cost),
+    costCurrency: value.cost_currency === null || value.cost_currency === undefined
+      ? "USD"
+      : String(value.cost_currency),
   };
 }
