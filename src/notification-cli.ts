@@ -7,12 +7,22 @@ const config = loadConfig();
 const database = new InvestmentDatabase(databasePath);
 try {
   const center = new MessageCenter(config, database);
-  if (!center.hasChannels()) throw new Error("未配置 FEISHU_WEBHOOK_URL 或 WECHAT_WEBHOOK_URL。");
+  if (!center.hasChannels()) {
+    throw new Error("未配置消息通道，或飞书 Agent 尚未通过首次对话绑定报告接收会话。");
+  }
   await center.publish({
     runId: null,
     severity: "info",
     title: "Livermore 消息中心测试",
-    body: `本地消息通道工作正常。\n时间：${new Date().toISOString()}`,
+    body: [
+      "### Markdown 渲染验证",
+      "",
+      "- **飞书应用机器人**：连接正常",
+      "- **定时报告通道**：连接正常",
+      `- **测试时间**：${new Date().toISOString()}`,
+      "",
+      `[打开 Livermore Agent Web](${config.webUiUrl})`,
+    ].join("\n"),
   });
   console.log("测试消息已发送。");
 } catch (error) {

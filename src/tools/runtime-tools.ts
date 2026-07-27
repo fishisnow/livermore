@@ -4,7 +4,21 @@ import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { AppConfig } from "../config.js";
-import { queryIwencai, iwencaiScriptPath } from "../market/iwencai-client.js";
+import {
+  futuKlineScriptPath,
+  futuIndicatorScriptPath,
+  futuNewsScriptPath,
+  futuSnapshotScriptPath,
+  queryFutuMarket,
+  queryFutuNews,
+} from "../market/futu-client.js";
+import {
+  isIwencaiQuotaExceeded,
+  iwencaiQuotaExceededResult,
+  queryIwencai,
+  iwencaiScriptPath,
+} from "../market/iwencai-client.js";
+import { isMainlandSecurity, normalizeSecurityCode } from "../market/normalized-market.js";
 import { projectRoot, projectSkillsDirectory, reportsDirectory } from "../project-paths.js";
 import type { InvestmentDatabase } from "../storage/database.js";
 import { collectLiveSources } from "../briefings/source-provider.js";
@@ -20,6 +34,8 @@ export interface SkillDescriptor {
 export interface RuntimeToolHooks {
   onSkillRead?: (name: string, content: string) => void;
   onIwencaiResult?: (query: string, result: unknown) => void;
+  onFutuResult?: (symbols: string[], result: unknown) => void;
+  onFutuNewsResult?: (keywords: string[], result: unknown) => void;
 }
 
 let skillCache: { expiresAt: number; value: SkillDescriptor[] } | undefined;
@@ -44,6 +60,21 @@ const searchParameters = Type.Object({
 
 const skillParameters = Type.Object({
   name: Type.String({ minLength: 1, maxLength: 120 }),
+});
+
+const securityListParameters = Type.Object({
+  symbols: Type.Array(Type.String({ minLength: 2, maxLength: 30 }), {
+    minItems: 1,
+    maxItems: 50,
+  }),
+});
+
+const futuNewsParameters = Type.Object({
+  keywords: Type.Array(Type.String({ minLength: 1, maxLength: 80 }), {
+    minItems: 1,
+    maxItems: 10,
+  }),
+  maxCount: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })),
 });
 
 export function createRuntimeTools(
@@ -139,6 +170,79 @@ export function createRuntimeTools(
         try {
           const result = await queryIwencai(config, params);
           hooks.onIwencaiResult?.(params.query, result);
+          return textResult(JSON.stringify(result, null, 2));
+        } catch (error) {
+          if (isIwencaiQuotaExceeded(error)) {
+            const result = iwencaiQuotaExceededResult(params.query, error);
+            hooks.onIwencaiResult?.(params.query, result);
+            return textResult(JSON.stringify(result, null, 2));
+          }
+          return textResult(errorMessage(error), true);
+        }
+      },
+    } satisfies AgentTool<any>] : []),
+    ...(existsSync(iwencaiScriptPath) ? [{
+      name: "query_a_share_main_fund_flow",
+      label: "Query A-share main fund flow",
+      description: "Query only the main net capital inflow of mainland A-share/ETF symbols through the installed hithink-market-query skill. Do not use this tool for latest price, daily change, RSI, MACD, Hong Kong securities, or other market fields.",
+      parameters: securityListParameters,
+      async execute(_id, rawParams) {
+        const params = rawParams as { symbols: string[] };
+        const symbols = [...new Set(params.symbols.map((symbol) => normalizeSecurityCode(symbol) ?? symbol))];
+        const invalid = symbols.filter((symbol) => !isMainlandSecurity(symbol));
+        if (invalid.length > 0) {
+          return textResult(`Only mainland SH/SZ/BJ symbols are allowed: ${invalid.join(", ")}`, true);
+        }
+        if (!config.iwencaiApiKey) {
+          return textResult("IWENCAI_API_KEY is not configured in Livermore's local .env.", true);
+        }
+        const iwencaiCodes = symbols.map((symbol) => symbol.split(".")[0]!);
+        const query = `${iwencaiCodes.join("、")} 今日主力资金净流入，只返回证券代码、证券简称、主力净流入`;
+        try {
+          const result = await queryIwencai(config, {
+            query,
+            limit: Math.min(50, Math.max(10, symbols.length)),
+          });
+          hooks.onIwencaiResult?.(query, result);
+          return textResult(JSON.stringify(result, null, 2));
+        } catch (error) {
+          if (isIwencaiQuotaExceeded(error)) {
+            const result = iwencaiQuotaExceededResult(query, error);
+            hooks.onIwencaiResult?.(query, result);
+            return textResult(JSON.stringify(result, null, 2));
+          }
+          return textResult(errorMessage(error), true);
+        }
+      },
+    } satisfies AgentTool<any>] : []),
+    ...(existsSync(futuSnapshotScriptPath)
+      && existsSync(futuKlineScriptPath)
+      && existsSync(futuIndicatorScriptPath) ? [{
+      name: "query_futu_market",
+      label: "Query Futu market data",
+      description: "Query latest price, daily change, and daily-K-line RSI/MACD for A-share and Hong Kong holdings through the installed read-only futuapi skill. Requires a running Futu OpenD and a FUTU_PYTHON environment with futu-api installed.",
+      parameters: securityListParameters,
+      async execute(_id, rawParams) {
+        const params = rawParams as { symbols: string[] };
+        try {
+          const result = await queryFutuMarket(config, params.symbols);
+          hooks.onFutuResult?.(params.symbols, result);
+          return textResult(JSON.stringify(result, null, 2));
+        } catch (error) {
+          return textResult(errorMessage(error), true);
+        }
+      },
+    } satisfies AgentTool<any>] : []),
+    ...(existsSync(futuNewsScriptPath) ? [{
+      name: "query_futu_news",
+      label: "Query Futu holding news",
+      description: "Search the latest news, announcements, and ratings related to portfolio holdings through the installed read-only futuapi skill. Use security names returned by query_futu_market as keywords. Query at most 10 holdings per call.",
+      parameters: futuNewsParameters,
+      async execute(_id, rawParams) {
+        const params = rawParams as { keywords: string[]; maxCount?: number };
+        try {
+          const result = await queryFutuNews(config, params.keywords, params.maxCount ?? 3);
+          hooks.onFutuNewsResult?.(params.keywords, result);
           return textResult(JSON.stringify(result, null, 2));
         } catch (error) {
           return textResult(errorMessage(error), true);

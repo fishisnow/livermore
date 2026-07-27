@@ -80,6 +80,7 @@ async function ensurePhoenix(): Promise<void> {
 }
 
 async function schedulesInstalled(): Promise<boolean> {
+  const config = loadConfig();
   const labels = [
     "com.livermore.phoenix",
     "com.livermore.web",
@@ -89,6 +90,7 @@ async function schedulesInstalled(): Promise<boolean> {
     "com.livermore.market-close",
     "com.livermore.ai-close",
     "com.livermore.portfolio-risk",
+    ...(config.feishuAppId && config.feishuAppSecret ? ["com.livermore.feishu"] : []),
   ];
   try {
     await Promise.all(labels.map((label) => access(path.join(homedir(), "Library", "LaunchAgents", `${label}.plist`))));
@@ -98,8 +100,8 @@ async function schedulesInstalled(): Promise<boolean> {
   }
 }
 
-function serviceLoaded(): boolean {
-  const result = spawnSync("launchctl", ["print", `${launchDomain()}/com.livermore.phoenix`], { stdio: "ignore" });
+function serviceLoaded(label = "com.livermore.phoenix"): boolean {
+  const result = spawnSync("launchctl", ["print", `${launchDomain()}/${label}`], { stdio: "ignore" });
   return result.status === 0;
 }
 
@@ -126,6 +128,8 @@ async function printStatus(): Promise<void> {
   const installed = await access(phoenixExecutable).then(() => true).catch(() => false);
   console.log(`Phoenix 安装：${installed ? "是" : "否"}`);
   console.log(`Phoenix 服务：${serviceLoaded() ? "已加载" : "未加载"}`);
+  const config = loadConfig();
+  console.log(`飞书 Agent：${!config.feishuAppId ? "未配置" : serviceLoaded("com.livermore.feishu") ? "已加载" : "未加载"}`);
   if (installed) {
     try {
       const response = await fetch(loadConfig().phoenixUiUrl, { signal: AbortSignal.timeout(2_000) });

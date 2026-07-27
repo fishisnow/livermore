@@ -12,6 +12,9 @@ describe("loadConfig", () => {
       tavilyApiKey: undefined,
       iwencaiBaseUrl: "https://openapi.iwencai.com",
       iwencaiApiKey: undefined,
+      futuPythonExecutable: "/usr/bin/python3",
+      futuOpenDHost: "127.0.0.1",
+      futuOpenDPort: 11111,
       searchMaxResults: 5,
       tracingEnabled: true,
       traceContentEnabled: true,
@@ -22,6 +25,8 @@ describe("loadConfig", () => {
       phoenixUiUrl: "http://localhost:6006",
       webPort: 4310,
       webUiUrl: "http://127.0.0.1:4310",
+      feishuAppId: undefined,
+      feishuAppSecret: undefined,
       feishuWebhookUrl: undefined,
       wechatWebhookUrl: undefined,
       notifyOnSuccess: true,
@@ -38,6 +43,9 @@ describe("loadConfig", () => {
       tavilyApiKey: undefined,
       iwencaiBaseUrl: "https://openapi.iwencai.com",
       iwencaiApiKey: undefined,
+      futuPythonExecutable: "/usr/bin/python3",
+      futuOpenDHost: "127.0.0.1",
+      futuOpenDPort: 11111,
       searchMaxResults: 5,
       tracingEnabled: true,
       traceContentEnabled: true,
@@ -48,6 +56,8 @@ describe("loadConfig", () => {
       phoenixUiUrl: "http://localhost:6006",
       webPort: 4310,
       webUiUrl: "http://127.0.0.1:4310",
+      feishuAppId: undefined,
+      feishuAppSecret: undefined,
       feishuWebhookUrl: undefined,
       wechatWebhookUrl: undefined,
       notifyOnSuccess: true,
@@ -62,6 +72,30 @@ describe("loadConfig", () => {
   it("validates the local Agent Web port", () => {
     expect(() => loadConfig({ LIVERMORE_WEB_PORT: "80" })).toThrow("between 1024 and 65535");
     expect(loadConfig({ LIVERMORE_WEB_PORT: "5310" }).webUiUrl).toBe("http://127.0.0.1:5310");
+  });
+
+  it("accepts a dedicated Futu Python and validates the OpenD port", () => {
+    expect(loadConfig({
+      FUTU_PYTHON: "/opt/futu/bin/python",
+      FUTU_OPEND_HOST: "localhost",
+      FUTU_OPEND_PORT: "21111",
+    })).toMatchObject({
+      futuPythonExecutable: "/opt/futu/bin/python",
+      futuOpenDHost: "localhost",
+      futuOpenDPort: 21111,
+    });
+    expect(() => loadConfig({ FUTU_OPEND_PORT: "70000" })).toThrow("between 1 and 65535");
+  });
+
+  it("requires complete Feishu app credentials", () => {
+    expect(loadConfig({
+      FEISHU_APP_ID: "cli_test",
+      FEISHU_APP_SECRET: "secret",
+    })).toMatchObject({
+      feishuAppId: "cli_test",
+      feishuAppSecret: "secret",
+    });
+    expect(() => loadConfig({ FEISHU_APP_ID: "cli_test" })).toThrow("must be configured together");
   });
 
   it("allows Tavily MCP to be disabled for direct-source-only operation", () => {

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { access, mkdir, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { loadConfig } from "./config.js";
 import { phoenixDataDirectory, phoenixExecutable, projectRoot } from "./project-paths.js";
 
 interface Schedule {
@@ -52,6 +53,7 @@ if (command !== "install" && command !== "uninstall") {
   await mkdir(path.join(projectRoot, "data", "runtime"), { recursive: true });
   await installPhoenixService(command, directory, domain);
   await installWebService(command, directory, domain);
+  await installFeishuService(command, directory, domain);
   for (const schedule of schedules) {
     const label = `com.livermore.${schedule.label}`;
     const filename = path.join(directory, `${label}.plist`);
@@ -69,6 +71,46 @@ if (command !== "install" && command !== "uninstall") {
     execFileSync("launchctl", ["bootstrap", domain, filename], { stdio: "inherit" });
     console.log(`已安装 ${label}：${schedule.description}`);
   }
+}
+
+async function installFeishuService(command: "install" | "uninstall", directory: string, domain: string): Promise<void> {
+  const label = "com.livermore.feishu";
+  const filename = path.join(directory, `${label}.plist`);
+  try {
+    execFileSync("launchctl", ["bootout", domain, filename], { stdio: "ignore" });
+  } catch { /* The service may not be loaded yet. */ }
+  const config = loadConfig();
+  if (command === "uninstall" || !config.feishuAppId || !config.feishuAppSecret) {
+    await unlink(filename).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+    if (command === "uninstall") console.log(`已移除 ${label}`);
+    else console.log("未配置飞书应用凭据，跳过飞书长连接服务");
+    return;
+  }
+  await writeFile(filename, feishuPlist(label), "utf8");
+  execFileSync("launchctl", ["bootstrap", domain, filename], { stdio: "inherit" });
+  console.log(`已安装 ${label}：飞书 Agent 长连接登录后自动启动并保持运行`);
+}
+
+function feishuPlist(label: string): string {
+  const logs = path.join(projectRoot, "data", "runtime");
+  const service = path.join(projectRoot, "src", "feishu-bot-cli.ts");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${label}</string>
+  <key>ProgramArguments</key><array>
+    <string>${xml(process.execPath)}</string><string>--import</string><string>tsx</string><string>${xml(service)}</string>
+  </array>
+  <key>WorkingDirectory</key><string>${xml(projectRoot)}</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>${xml(path.join(logs, "feishu.log"))}</string>
+  <key>StandardErrorPath</key><string>${xml(path.join(logs, "feishu.error.log"))}</string>
+  <key>ProcessType</key><string>Background</string>
+</dict></plist>\n`;
 }
 
 async function installWebService(command: "install" | "uninstall", directory: string, domain: string): Promise<void> {

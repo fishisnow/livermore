@@ -89,6 +89,15 @@ export interface PositionRiskCheckInput {
   rawData: unknown;
 }
 
+export interface FeishuConversation {
+  chatId: string;
+  chatType: "p2p" | "group";
+  senderId: string;
+  subscribedReports: boolean;
+  createdAt: string;
+  lastMessageAt: string;
+}
+
 export class InvestmentDatabase {
   private readonly db: DatabaseSync;
 
@@ -234,6 +243,63 @@ export class InvestmentDatabase {
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(randomUUID(), alertId, channel, status, error ?? null, new Date().toISOString());
     if (status === "sent") this.db.prepare("UPDATE alerts SET status = 'sent' WHERE id = ?").run(alertId);
+  }
+
+  upsertFeishuConversation(input: {
+    chatId: string;
+    chatType: "p2p" | "group";
+    senderId: string;
+    seenAt: string;
+  }): FeishuConversation {
+    this.db.prepare(`
+      INSERT INTO feishu_conversations (
+        chat_id, chat_type, sender_id, subscribed_reports, created_at, last_message_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(chat_id) DO UPDATE SET
+        chat_type = excluded.chat_type,
+        sender_id = excluded.sender_id,
+        last_message_at = excluded.last_message_at
+    `).run(
+      input.chatId,
+      input.chatType,
+      input.senderId,
+      input.chatType === "p2p" ? 1 : 0,
+      input.seenAt,
+      input.seenAt,
+    );
+    return this.getFeishuConversation(input.chatId)!;
+  }
+
+  getFeishuConversation(chatId: string): FeishuConversation | undefined {
+    const row = this.db.prepare("SELECT * FROM feishu_conversations WHERE chat_id = ?").get(chatId);
+    return row ? mapFeishuConversation(row) : undefined;
+  }
+
+  setFeishuReportSubscription(chatId: string, subscribed: boolean): boolean {
+    const result = this.db.prepare(`
+      UPDATE feishu_conversations SET subscribed_reports = ? WHERE chat_id = ?
+    `).run(subscribed ? 1 : 0, chatId);
+    return Number(result.changes) > 0;
+  }
+
+  listFeishuReportRecipients(): FeishuConversation[] {
+    return (this.db.prepare(`
+      SELECT * FROM feishu_conversations
+      WHERE subscribed_reports = 1
+      ORDER BY created_at
+    `).all() as unknown[]).map(mapFeishuConversation);
+  }
+
+  claimFeishuMessage(input: {
+    messageId: string;
+    chatId: string;
+    receivedAt: string;
+  }): boolean {
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO feishu_messages (message_id, chat_id, received_at)
+      VALUES (?, ?, ?)
+    `).run(input.messageId, input.chatId, input.receivedAt);
+    return Number(result.changes) > 0;
   }
 
   createPosition(input: PortfolioPositionInput): PortfolioPosition {
@@ -398,6 +464,17 @@ export class InvestmentDatabase {
         id TEXT PRIMARY KEY, alert_id TEXT NOT NULL REFERENCES alerts(id), channel TEXT NOT NULL,
         status TEXT NOT NULL, error_message TEXT, attempted_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS feishu_conversations (
+        chat_id TEXT PRIMARY KEY, chat_type TEXT NOT NULL, sender_id TEXT NOT NULL,
+        subscribed_reports INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL, last_message_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS feishu_messages (
+        message_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL,
+        received_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_feishu_conversations_subscribed
+        ON feishu_conversations(subscribed_reports, created_at);
       CREATE TABLE IF NOT EXISTS portfolio_positions (
         id TEXT PRIMARY KEY, symbol TEXT NOT NULL, quantity REAL NOT NULL CHECK(quantity > 0),
         purchased_at TEXT NOT NULL, cost_basis REAL NOT NULL CHECK(cost_basis > 0),
@@ -438,6 +515,18 @@ function mapPortfolioPosition(row: unknown): PortfolioPosition {
     severity: value.severity === null ? null : value.severity as PortfolioPosition["severity"],
     riskSummary: value.risk_summary === null ? null : String(value.risk_summary),
     lastCheckedAt: value.last_checked_at === null ? null : String(value.last_checked_at),
+  };
+}
+
+function mapFeishuConversation(row: unknown): FeishuConversation {
+  const value = row as Record<string, string | number>;
+  return {
+    chatId: String(value.chat_id),
+    chatType: String(value.chat_type) as FeishuConversation["chatType"],
+    senderId: String(value.sender_id),
+    subscribedReports: Number(value.subscribed_reports) === 1,
+    createdAt: String(value.created_at),
+    lastMessageAt: String(value.last_message_at),
   };
 }
 

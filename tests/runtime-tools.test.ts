@@ -78,4 +78,20 @@ describe("interactive Agent runtime tools", () => {
     });
     database.close();
   });
+
+  it("separates Futu quotes from A-share-only Iwencai fund flow", async () => {
+    const database = new InvestmentDatabase(":memory:");
+    const tools = createRuntimeTools(loadConfig({}), database);
+    expect(tools.find((item) => item.name === "query_futu_market")).toBeDefined();
+    expect(tools.find((item) => item.name === "query_futu_news")).toBeDefined();
+    const fundFlowTool = tools.find((item) => item.name === "query_a_share_main_fund_flow");
+    expect(fundFlowTool).toBeDefined();
+    const result = await fundFlowTool!.execute("tool-call", { symbols: ["HK00700"] });
+    expect("isError" in result && result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Only mainland"),
+    });
+    database.close();
+  });
 });

@@ -17,9 +17,12 @@
 flowchart LR
     User["投资研究用户"] --> CLI["交互式 CLI"]
     User --> Web["Agent Web / Pi 持续对话"]
+    User --> FeishuAgent["飞书 Agent / 长连接对话"]
     Launchd["macOS launchd"] --> Worker["日报 / 持仓巡检 Worker"]
     CLI --> Agent["Pi Agent Core"]
     Web --> Agent
+    FeishuAgent --> Agent
+    FeishuAgent --> DB
     Web --> DB["SQLite 业务账本"]
     Web --> Skills["项目 skills/ · 按需加载"]
     Web --> Tavily
@@ -29,11 +32,12 @@ flowchart LR
     Worker --> OTel["OpenTelemetry"]
     OTel --> Phoenix["本地 Phoenix"]
     Worker --> Message["消息中心"]
-    Message --> Feishu["飞书机器人"]
+    Message --> FeishuAgent
     Message --> WeCom["企业微信机器人"]
     Agent --> DeepSeek["DeepSeek API"]
     Worker --> Sources["公开市场与新闻来源"]
-    Worker --> Iwencai["同花顺问财 OpenAPI"]
+    Worker --> Futu["Futu OpenD / OpenAPI"]
+    Worker --> Iwencai["同花顺问财 OpenAPI · 仅A股主力资金"]
     Worker -. 可选 .-> Tavily["Tavily Remote MCP"]
 ```
 
@@ -57,7 +61,7 @@ flowchart LR
 
 模型不自主浏览网页。采集结果先被归一化为 `SourceItem`，提示词明确将网页视作不可信数据，Agent 只负责基于证据综合和表达。
 
-持仓巡检的 Agent 只开放 `read_skill` 与 `query_iwencai_market`。它必须先读取 `hithink-market-query`，再查询本次持仓并生成解释；工具原始行情由外层工作流捕获，经 `Iwencai → NormalizedMarketQuote` 适配层统一证券代码和字段别名，并按标的合并多次查询结果。盈亏和报警等级只读取标准化对象，由确定性代码重新计算。每个标准化对象保留原始行、查询语句和问财 Trace ID，既保留 Agent 的 Skill 驱动能力和审计证据，也避免模型决定止损、伪造价格或降低风险等级。
+持仓巡检的 Agent 只开放 `read_skill`、`query_futu_market`、`query_futu_news` 与 `query_a_share_main_fund_flow`。它必须先读取 `futuapi`，通过本机 Futu OpenD 获取全部持仓的最新价、当日涨跌、日 K 线 RSI/MACD，以及持仓相关的最新新闻、公告和评级；只有存在沪深京持仓时，才读取 `hithink-market-query` 并查询 A 股主力净流入。港股不适用本任务定义的主力净流入指标，工具层会拒绝传入港股代码，Prompt 也禁止展示或推断该字段。外层合并器实施严格字段归属：Futu 独占名称、价格、涨跌与技术指标，同花顺只允许补充 A 股主力资金；即使问财意外返回价格字段也不会被业务逻辑采纳。盈亏和报警等级只读取合并后的 `NormalizedMarketQuote`，由确定性代码重新计算。每个对象保留数据源、原始快照、查询语句和问财 Trace ID，既保留 Agent 的 Skill 驱动能力和审计证据，也避免模型混用数据源、决定止损或降低风险等级。
 
 ## 4. 运行事务与幂等
 
@@ -79,6 +83,7 @@ erDiagram
     SOURCES ||--o{ REPORTED_SOURCES : deduplicates
     PORTFOLIO_POSITIONS ||--o{ POSITION_RISK_CHECKS : checked
     TASK_RUNS ||--o{ POSITION_RISK_CHECKS : records
+    FEISHU_CONVERSATIONS ||--o{ FEISHU_MESSAGES : receives
 
     TASK_RUNS {
       text id PK
@@ -107,6 +112,13 @@ erDiagram
       text severity
       text alerted_at
     }
+    FEISHU_CONVERSATIONS {
+      text chat_id PK
+      text chat_type
+      text sender_id
+      integer subscribed_reports
+      text last_message_at
+    }
 ```
 
 业务库位于 `data/livermore.db`，启用 WAL、外键和 5 秒 busy timeout。它保存任务事实，不依赖 Phoenix。
@@ -126,7 +138,6 @@ flowchart TB
     Agent --> L2
     Agent --> L3
     Agent --> L4
-    L5 --> Agent
     L4 -. 后续检索 .-> L5
 ```
 
@@ -154,10 +165,17 @@ portfolio.risk_check
 │   └── agent.turn
 │       ├── gen_ai.chat
 │       ├── tool.read_skill
-│       └── tool.query_iwencai_market
+│       ├── tool.query_futu_market
+│       └── tool.query_a_share_main_fund_flow（仅A股）
 ├── market.normalize
 ├── portfolio.position_check
 └── portfolio.alert（按需）
+
+agent.feishu_chat
+├── agent.turn
+│   ├── gen_ai.chat
+│   └── tool.<name>
+└── Feishu reply
 ```
 
 Pi Agent 的事件订阅被映射为 OpenInference `AGENT`、`LLM` 与 `TOOL` Span，工作流节点标记为 `CHAIN`。模型 Span 记录 provider、model、stop reason、输入/输出/cache/reasoning token 和成本。`TRACE_CONTENT_ENABLED=true` 时，Prompt、Response、工具参数和工具结果写入本机 Phoenix；设为 `false` 可只保留元数据。Trace 内容可能包含持仓和研究材料，不应对外暴露 Phoenix。
@@ -180,10 +198,15 @@ CLI 是短生命周期进程，退出前调用 `forceFlush()`。Trace 导出失�
 
 当前通道：
 
-- 飞书群机器人文本消息。
+- 飞书应用机器人：向已绑定的单聊或已订阅群聊发送 `interactive` Markdown 卡片任务报告。
+- 飞书群自定义机器人 Webhook（兼容的可选仅发送通道）。
 - 企业微信群机器人文本消息。
 
-日报成功运行发送摘要、评估和报告正文；持仓巡检只在风险首次出现、升级或超过 4 小时冷却期时发送提醒；运行异常发送 critical 告警。持仓规则由代码确定：亏损 5%/10%、日跌幅 4%/7%、下跌叠加主力流出、RSI 过热和数据缺失。Agent 负责解释影响，不由模型独立决定是否报警。
+飞书 Agent 通过官方 SDK WebSocket 长连接接收 `im.message.receive_v1`，无需公网回调。单聊首次消息自动绑定报告订阅；群聊必须显式发送“订阅日报”。入站消息 ID 写入 `feishu_messages` 去重，多轮 Agent 状态保存在常驻进程内，重启后重新开始会话但报告订阅仍保存在 SQLite。
+
+日报成功运行发送摘要、评估和报告正文；每次持仓巡检都会发送一张精简汇总卡片，不再推送完整报告。卡片包含 2-4 句简明总结、最多三条对持仓最重要的最新消息，以及覆盖全部持仓并按 P0/P1/P2 排序的风险优先级表格。4 小时冷却期仅用于风险事件的升级与去重记录，不会阻断巡检结果投递。完整巡检分析仍写入本地 Markdown 报告并可在 Agent Web 查询。
+
+持仓规则由代码确定：亏损 5%/10%、日跌幅 4%/7%、下跌叠加主力流出、RSI 过热和数据缺失。用户录入的成本价统一按复权后单位成本处理。Agent 负责解释影响，并为每只持仓输出“买入 / 持有 / 卖出”三选一建议、执行条件和失效条件；模型不独立决定报警等级，也不执行交易。运行异常发送 critical 告警。
 
 ## 10. 运行拓扑
 
@@ -194,7 +217,9 @@ flowchart TB
       Launchd["6 个 launchd 日历触发器"]
       PhoenixLaunchd["Phoenix launchd 常驻服务"]
       WebLaunchd["Agent Web launchd 常驻服务"]
+      FeishuLaunchd["Feishu Agent launchd 常驻服务"]
       WebProcess["Node.js Agent Web :4310"]
+      FeishuProcess["Node.js Feishu WebSocket Agent"]
       Node["短生命周期 Node.js Worker"]
       AppDB["data/livermore.db"]
       Files["data/reports"]
@@ -210,10 +235,13 @@ flowchart TB
       PhoenixLaunchd --> PhoenixProcess
       WebLaunchd --> WebProcess
       WebProcess --> AppDB
+      FeishuLaunchd --> FeishuProcess
+      FeishuProcess --> AppDB
     end
     Bootstrap --> Launchd
     Bootstrap --> PhoenixLaunchd
     Bootstrap --> WebLaunchd
+    Bootstrap --> FeishuLaunchd
     Bootstrap --> PhoenixProcess
 ```
 

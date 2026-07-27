@@ -1,19 +1,16 @@
 import type { IwencaiQueryResult } from "./iwencai-client.js";
+import {
+  normalizeSecurityCode,
+  type NormalizedMarketQuote,
+} from "./normalized-market.js";
 
-export interface NormalizedMarketQuote {
-  symbol: string;
-  name?: string;
-  currentPrice?: number;
-  dayChangePct?: number;
-  mainNetInflow?: number;
-  rsi?: number;
-  macd?: number;
-  evidence: Array<{
-    query?: string;
-    traceId?: string;
-    row: Record<string, unknown>;
-  }>;
-}
+export {
+  findNormalizedQuote,
+  isMainlandSecurity,
+  normalizeSecurityCode,
+  toFutuSecurityCode,
+  type NormalizedMarketQuote,
+} from "./normalized-market.js";
 
 const fieldAliases = {
   code: [
@@ -71,6 +68,7 @@ export function normalizeIwencaiResults(results: IwencaiQueryResult[]): Normaliz
         quotes.set(symbol, quote);
       }
       quote.evidence.push({
+        source: "iwencai",
         ...(result.query ? { query: result.query } : {}),
         ...(result.trace_id ? { traceId: result.trace_id } : {}),
         row,
@@ -90,42 +88,6 @@ export function normalizeIwencaiResults(results: IwencaiQueryResult[]): Normaliz
     }
   }
   return [...quotes.values()];
-}
-
-export function findNormalizedQuote(
-  quotes: NormalizedMarketQuote[],
-  requestedSymbol: string,
-): NormalizedMarketQuote | undefined {
-  const symbol = normalizeSecurityCode(requestedSymbol);
-  return symbol ? quotes.find((quote) => quote.symbol === symbol) : undefined;
-}
-
-export function normalizeSecurityCode(value: string): string | undefined {
-  const compact = value.trim().toUpperCase().replaceAll(/\s+/g, "");
-  if (!compact) return undefined;
-  const prefixed = compact.match(/^(SH|SZ|BJ|HK)[.:\-]?(\d+)$/);
-  if (prefixed) return canonicalCode(prefixed[2]!, prefixed[1]!);
-  const suffixed = compact.match(/^(\d+)[.:\-]?(SH|SZ|BJ|HK)$/);
-  if (suffixed) return canonicalCode(suffixed[1]!, suffixed[2]!);
-  if (!/^\d+$/.test(compact)) return compact;
-  if (compact.length !== 6) return compact;
-  const exchange = inferMainlandExchange(compact);
-  return exchange ? `${compact}.${exchange}` : compact;
-}
-
-function canonicalCode(digits: string, exchange: string): string {
-  if (exchange === "HK") {
-    const significant = digits.replace(/^0+/, "") || "0";
-    return `${significant.padStart(5, "0")}.HK`;
-  }
-  return `${digits.padStart(6, "0")}.${exchange}`;
-}
-
-function inferMainlandExchange(code: string): "SH" | "SZ" | "BJ" | undefined {
-  if (/^[569]/.test(code)) return "SH";
-  if (/^[0123]/.test(code)) return "SZ";
-  if (/^[48]/.test(code)) return "BJ";
-  return undefined;
 }
 
 function readNumeric(row: Record<string, unknown>, aliases: readonly RegExp[]): number | undefined {

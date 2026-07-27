@@ -22,12 +22,40 @@ export interface IwencaiQueryOptions {
 export interface IwencaiQueryResult {
   success?: boolean;
   query?: string;
+  unavailable?: boolean;
+  unavailable_reason?: "quota_exceeded";
+  message?: string;
   code_count?: number;
   returned_count?: number;
   has_more?: boolean;
   trace_id?: string;
   datas?: Array<Record<string, unknown>>;
   [key: string]: unknown;
+}
+
+export function isIwencaiQuotaExceeded(error: unknown): boolean {
+  const message = errorMessage(error);
+  return [
+    /次数已用完/,
+    /升级权益/,
+    /额度.{0,12}(?:用完|不足|超出|达到|限制)/,
+    /(?:usage|plan).{0,20}limit/i,
+    /quota.{0,20}(?:exceed|limit|used)/i,
+  ].some((pattern) => pattern.test(message));
+}
+
+export function iwencaiQuotaExceededResult(
+  query: string,
+  error: unknown,
+): IwencaiQueryResult {
+  return {
+    success: false,
+    query,
+    unavailable: true,
+    unavailable_reason: "quota_exceeded",
+    message: errorMessage(error).slice(0, 2_000),
+    datas: [],
+  };
 }
 
 export async function queryIwencai(

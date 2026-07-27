@@ -12,5 +12,6 @@ data/runtime/*
 data/*.db*
 data/phoenix/
 .venv-phoenix/
+.venv-futu/
 .python/
 .idea

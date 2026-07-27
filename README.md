@@ -17,7 +17,7 @@ Livermore 是运行在个人电脑上的长期投资研究 Agent。它定时采�
 
 ## 快速开始
 
-要求 Node.js 22 或更新版本，并安装 `uv`。Phoenix 使用项目内独立 Python 3.12 环境，不需要 Docker Desktop，也不会污染系统 Python。
+要求 Node.js 22 或更新版本，并安装 `uv`。Phoenix 与 Futu SDK 分别使用项目内独立 Python 3.12 环境，不需要 Docker Desktop，也不会污染系统 Python。持仓行情还要求本机已启动并登录 Futu OpenD。
 
 一键安装依赖、系统命令、Phoenix、后台服务和定时任务，并打开 Web 界面：
 
@@ -113,7 +113,15 @@ npm run scheduler -- install
 
 ## 持仓风险规则
 
-持仓完全由用户在 Agent Web 中手工维护，Livermore 不读取券商账户，也不会下单。每次巡检启动一个短生命周期 Pi Agent：Agent 先读取项目安装的 `hithink-market-query` Skill，再调用 `query_iwencai_market` 获取最新价、当日涨跌、主力净流入、RSI 和 MACD，并生成辅助研判。工具结果先经过行情适配层：统一 A 股、ETF、港股代码，映射同花顺动态中文列名，并合并同一标的的多次查询结果；确定性代码随后只读取稳定字段，计算相对买入成本的盈亏并执行硬风险规则，模型不能覆盖最终等级。标准化结果仍保留原始行、查询语句和问财 Trace ID，便于审计。
+持仓完全由用户在 Agent Web 中手工维护，Livermore 不读取券商账户，也不会下单。每次巡检启动一个短生命周期 Pi Agent：Agent 先读取 `futuapi` Skill，通过 `query_futu_market` 获取全部 A 股/港股持仓的最新价、当日涨跌与日 K 线 RSI/MACD，再通过 `query_futu_news` 获取持仓相关的最新新闻、公告与评级。只有存在 A 股持仓时，才读取 `hithink-market-query` 并调用 `query_a_share_main_fund_flow` 获取主力净流入；港股不查询、展示或推断主力净流入。确定性适配层统一证券代码并实施严格字段归属：Futu 独占名称、价格、涨跌和技术指标，同花顺只补充 A 股主力资金，问财意外返回的价格或指标不会覆盖 Futu。随后代码计算相对买入成本的盈亏并执行硬风险规则，模型不能覆盖最终等级。标准化结果仍保留 Futu 快照、查询错误、问财原始行、查询语句和 Trace ID，便于审计。
+
+Futu SDK 位于项目的 `.venv-futu/`，本地 `.env` 通过以下配置连接 OpenD：
+
+```env
+FUTU_PYTHON=/absolute/path/to/livermore/.venv-futu/bin/python
+FUTU_OPEND_HOST=127.0.0.1
+FUTU_OPEND_PORT=11111
+```
 
 - 警告：持仓亏损达到 5%、当日跌幅达到 4%、下跌且主力净流出、RSI 达到 80，或行情查询失败。
 - 严重：持仓亏损达到 10%，或当日跌幅达到 7%。
@@ -143,14 +151,30 @@ npm run runs -- --run <完整运行ID>
 
 业务记录保存在 `data/livermore.db`。SQLite 是任务事实来源；Phoenix 未启动时，日报和消息中心仍可运行，只会出现 Trace flush 提示。
 
-## 消息中心
+## 消息中心与飞书 Agent
 
-支持飞书群机器人和企业微信群机器人：
+飞书应用机器人同时承担定时报告投递和 Agent 对话：
+
+```env
+FEISHU_APP_ID=
+FEISHU_APP_SECRET=
+WECHAT_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...
+NOTIFY_ON_SUCCESS=true
+```
+
+飞书开发者后台需要完成：
+
+1. 开启“机器人”应用能力。
+2. 开通 `im:message:send_as_bot`、`im:message.p2p_msg:readonly`；需要群聊时再开通 `im:message.group_at_msg:readonly`。
+3. 在“事件与回调”中选择“使用长连接接收事件”，订阅 `im.message.receive_v1`。
+4. 创建并发布应用版本，将应用安装到当前企业。
+
+`com.livermore.feishu` 使用官方 Node SDK WebSocket 长连接，无需公网域名。用户首次在飞书中与 Livermore 单聊后，该会话自动接收后续定时报告；群聊默认只响应 @机器人，发送“订阅日报”后才接收报告。支持命令：`订阅日报`、`取消订阅`、`订阅状态`、`帮助`。
+
+旧的飞书群自定义机器人 Webhook 仍可作为仅发送通道：
 
 ```env
 FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/...
-WECHAT_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...
-NOTIFY_ON_SUCCESS=true
 ```
 
 测试消息通道：
@@ -159,7 +183,11 @@ NOTIFY_ON_SUCCESS=true
 npm run notify:test
 ```
 
-成功任务会发送运行摘要、评估结果和报告正文；失败任务会发送 critical 告警。所有告警和投递结果同时写入 SQLite。个人微信没有稳定的官方通用机器人 Webhook，因此当前 `WECHAT_WEBHOOK_URL` 指企业微信机器人。
+成功任务会使用飞书 `interactive` 卡片中的原生 `markdown` 组件发送运行摘要、评估结果和报告正文，标题、列表、链接与加粗会正常渲染。长日报会优先按二级标题拆分，并同时限制单卡字符数和可视行数；多张卡片会标记“第 N/M 部分”。每次持仓巡检都会推送一张精简卡片，内容为 2-4 句巡检总结（含最重要的持仓最新消息）和按 P0/P1/P2 排序的风险优先级表格；完整分析只保存在本地报告和 Agent Web 中。
+
+持仓巡检把用户录入的成本价统一视为复权后单位成本，可直接与 Futu 最新价比较。Agent 不再要求确认除权或复权口径，并且必须为每只持仓给出“买入 / 持有 / 卖出”三选一建议，同时说明理由、执行条件或参考区间以及建议失效条件。建议只供研究参考，Livermore 不执行交易。
+
+失败任务会发送 critical 告警。所有告警和投递结果同时写入 SQLite。个人微信没有稳定的官方通用机器人 Webhook，因此当前 `WECHAT_WEBHOOK_URL` 指企业微信机器人。
 
 ## 离线回放
 
@@ -210,7 +238,9 @@ npm run briefing -- \
 | `PHOENIX_UI_URL` | `http://localhost:6006` | 运行查询提示地址 |
 | `LIVERMORE_WEB_PORT` | `4310` | 本地 Agent Web 监听端口 |
 | `LIVERMORE_WEB_UI_URL` | `http://127.0.0.1:4310` | 系统命令打开的 Agent Web 地址 |
-| `FEISHU_WEBHOOK_URL` | 空 | 飞书群机器人 Webhook |
+| `FEISHU_APP_ID` | 空 | 飞书企业自建应用 ID |
+| `FEISHU_APP_SECRET` | 空 | 飞书企业自建应用密钥，仅保存于本地 `.env` |
+| `FEISHU_WEBHOOK_URL` | 空 | 可选的旧式飞书群机器人 Webhook |
 | `WECHAT_WEBHOOK_URL` | 空 | 企业微信群机器人 Webhook |
 | `NOTIFY_ON_SUCCESS` | `true` | 是否汇报成功任务 |
 

@@ -10,6 +10,9 @@ export interface AppConfig {
   tavilyApiKey: string | undefined;
   iwencaiBaseUrl: string;
   iwencaiApiKey: string | undefined;
+  futuPythonExecutable: string;
+  futuOpenDHost: string;
+  futuOpenDPort: number;
   searchMaxResults: number;
   tracingEnabled: boolean;
   traceContentEnabled: boolean;
@@ -20,6 +23,8 @@ export interface AppConfig {
   phoenixUiUrl: string;
   webPort: number;
   webUiUrl: string;
+  feishuAppId: string | undefined;
+  feishuAppSecret: string | undefined;
   feishuWebhookUrl: string | undefined;
   wechatWebhookUrl: string | undefined;
   notifyOnSuccess: boolean;
@@ -52,6 +57,15 @@ export function loadConfig(env?: NodeJS.ProcessEnv): AppConfig {
   if (!/^[A-Z]{3}$/.test(modelCostCurrency)) {
     throw new Error("MODEL_COST_CURRENCY must be a three-letter currency code such as CNY or USD.");
   }
+  const futuOpenDPort = Number.parseInt(source.FUTU_OPEND_PORT?.trim() || "11111", 10);
+  if (!Number.isInteger(futuOpenDPort) || futuOpenDPort < 1 || futuOpenDPort > 65535) {
+    throw new Error("FUTU_OPEND_PORT must be an integer between 1 and 65535.");
+  }
+  const feishuAppId = optional(source.FEISHU_APP_ID);
+  const feishuAppSecret = optional(source.FEISHU_APP_SECRET);
+  if ((feishuAppId === undefined) !== (feishuAppSecret === undefined)) {
+    throw new Error("FEISHU_APP_ID and FEISHU_APP_SECRET must be configured together.");
+  }
 
   return {
     provider: source.PI_PROVIDER?.trim() || "deepseek",
@@ -62,6 +76,9 @@ export function loadConfig(env?: NodeJS.ProcessEnv): AppConfig {
     tavilyApiKey: optional(source.TAVILY_API_KEY),
     iwencaiBaseUrl: source.IWENCAI_BASE_URL?.trim() || "https://openapi.iwencai.com",
     iwencaiApiKey: optional(source.IWENCAI_API_KEY),
+    futuPythonExecutable: source.FUTU_PYTHON?.trim() || "/usr/bin/python3",
+    futuOpenDHost: source.FUTU_OPEND_HOST?.trim() || "127.0.0.1",
+    futuOpenDPort,
     searchMaxResults,
     tracingEnabled: booleanValue(source.TRACING_ENABLED, true, "TRACING_ENABLED"),
     traceContentEnabled: booleanValue(source.TRACE_CONTENT_ENABLED, true, "TRACE_CONTENT_ENABLED"),
@@ -72,6 +89,8 @@ export function loadConfig(env?: NodeJS.ProcessEnv): AppConfig {
     phoenixUiUrl: source.PHOENIX_UI_URL?.trim() || "http://localhost:6006",
     webPort,
     webUiUrl: source.LIVERMORE_WEB_UI_URL?.trim() || `http://127.0.0.1:${webPort}`,
+    feishuAppId,
+    feishuAppSecret,
     feishuWebhookUrl: optional(source.FEISHU_WEBHOOK_URL),
     wechatWebhookUrl: optional(source.WECHAT_WEBHOOK_URL),
     notifyOnSuccess: booleanValue(source.NOTIFY_ON_SUCCESS, true, "NOTIFY_ON_SUCCESS"),
