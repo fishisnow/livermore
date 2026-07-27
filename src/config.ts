@@ -12,6 +12,7 @@ export interface AppConfig {
   iwencaiApiKey: string | undefined;
   searchMaxResults: number;
   tracingEnabled: boolean;
+  traceContentEnabled: boolean;
   otlpTraceEndpoint: string;
   phoenixUiUrl: string;
   webPort: number;
@@ -45,6 +46,7 @@ export function loadConfig(env?: NodeJS.ProcessEnv): AppConfig {
     iwencaiApiKey: optional(source.IWENCAI_API_KEY),
     searchMaxResults,
     tracingEnabled: booleanValue(source.TRACING_ENABLED, true, "TRACING_ENABLED"),
+    traceContentEnabled: booleanValue(source.TRACE_CONTENT_ENABLED, true, "TRACE_CONTENT_ENABLED"),
     otlpTraceEndpoint: source.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?.trim() || "http://localhost:6006/v1/traces",
     phoenixUiUrl: source.PHOENIX_UI_URL?.trim() || "http://localhost:6006",
     webPort,

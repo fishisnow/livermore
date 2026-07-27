@@ -14,6 +14,7 @@ describe("loadConfig", () => {
       iwencaiApiKey: undefined,
       searchMaxResults: 5,
       tracingEnabled: true,
+      traceContentEnabled: true,
       otlpTraceEndpoint: "http://localhost:6006/v1/traces",
       phoenixUiUrl: "http://localhost:6006",
       webPort: 4310,
@@ -36,6 +37,7 @@ describe("loadConfig", () => {
       iwencaiApiKey: undefined,
       searchMaxResults: 5,
       tracingEnabled: true,
+      traceContentEnabled: true,
       otlpTraceEndpoint: "http://localhost:6006/v1/traces",
       phoenixUiUrl: "http://localhost:6006",
       webPort: 4310,
@@ -59,5 +61,10 @@ describe("loadConfig", () => {
   it("allows Tavily MCP to be disabled for direct-source-only operation", () => {
     expect(loadConfig({ TAVILY_MCP_ENABLED: "false" }).tavilyMcpEnabled).toBe(false);
     expect(() => loadConfig({ TAVILY_MCP_ENABLED: "sometimes" })).toThrow("must be true or false");
+  });
+
+  it("allows local Trace content capture to be disabled", () => {
+    expect(loadConfig({ TRACE_CONTENT_ENABLED: "false" }).traceContentEnabled).toBe(false);
+    expect(() => loadConfig({ TRACE_CONTENT_ENABLED: "sometimes" })).toThrow("must be true or false");
   });
 });

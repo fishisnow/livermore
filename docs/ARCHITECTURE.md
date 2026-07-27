@@ -17,7 +17,7 @@
 flowchart LR
     User["投资研究用户"] --> CLI["交互式 CLI"]
     User --> Web["Agent Web / Pi 持续对话"]
-    Launchd["macOS launchd"] --> Worker["日报 Worker"]
+    Launchd["macOS launchd"] --> Worker["日报 / 持仓巡检 Worker"]
     CLI --> Agent["Pi Agent Core"]
     Web --> Agent
     Web --> DB["SQLite 业务账本"]
@@ -33,12 +33,13 @@ flowchart LR
     Message --> WeCom["企业微信机器人"]
     Agent --> DeepSeek["DeepSeek API"]
     Worker --> Sources["公开市场与新闻来源"]
+    Worker --> Iwencai["同花顺问财 OpenAPI"]
     Worker -. 可选 .-> Tavily["Tavily Remote MCP"]
 ```
 
 ## 3. Agent 架构模式
 
-交互问答是“受限单 Agent”，只开放本地报告保存工具。日报采用“确定性工作流 + Agent 综合”：
+交互问答是“受限单 Agent”。日报和持仓巡检均采用“确定性工作流包围 Agent”：日报先采集证据再交给 Agent 综合；持仓 Agent 自主读取项目 Skill 并调用受限行情工具，随后由代码复核硬阈值。
 
 ```mermaid
 flowchart LR
@@ -55,6 +56,8 @@ flowchart LR
 ```
 
 模型不自主浏览网页。采集结果先被归一化为 `SourceItem`，提示词明确将网页视作不可信数据，Agent 只负责基于证据综合和表达。
+
+持仓巡检的 Agent 只开放 `read_skill` 与 `query_iwencai_market`。它必须先读取 `hithink-market-query`，再查询本次持仓并生成解释；工具原始行情由外层工作流捕获，盈亏和报警等级由确定性代码重新计算。这样既保留 Agent 的 Skill 驱动能力，也避免模型决定止损、伪造价格或降低风险等级。
 
 ## 4. 运行事务与幂等
 
@@ -74,6 +77,8 @@ erDiagram
     ALERTS ||--o{ NOTIFICATION_DELIVERIES : sends
     TASK_RUNS ||--o{ REPORTED_SOURCES : commits
     SOURCES ||--o{ REPORTED_SOURCES : deduplicates
+    PORTFOLIO_POSITIONS ||--o{ POSITION_RISK_CHECKS : checked
+    TASK_RUNS ||--o{ POSITION_RISK_CHECKS : records
 
     TASK_RUNS {
       text id PK
@@ -85,6 +90,22 @@ erDiagram
       integer input_tokens
       integer output_tokens
       real cost
+    }
+    PORTFOLIO_POSITIONS {
+      text id PK
+      text symbol
+      real quantity
+      text purchased_at
+      real cost_basis
+    }
+    POSITION_RISK_CHECKS {
+      text id PK
+      text run_id FK
+      text position_id FK
+      real current_price
+      real pnl_pct
+      text severity
+      text alerted_at
     }
 ```
 
@@ -99,16 +120,17 @@ flowchart TB
     L2["L2 运行记忆\ntask_runs / evaluations / alerts"]
     L3["L3 来源记忆\nsources / reported_sources"]
     L4["L4 研究档案\nreports + Markdown"]
-    L5["L5 投资者长期记忆\n自选股/持仓/偏好，待实现"]
+    L5["L5 投资者长期记忆\n手工持仓 + 历史风险快照"]
     L0 --> Agent["Agent 推理"]
     L1 --> Agent
     Agent --> L2
     Agent --> L3
     Agent --> L4
+    L5 --> Agent
     L4 -. 后续检索 .-> L5
 ```
 
-当前长期记忆用于运行审计、来源去重和研究归档，尚未保存用户持仓与风险偏好。后续优先使用 SQLite FTS5，再评估是否需要向量数据库。
+当前长期记忆包括运行审计、来源去重、研究归档、用户手工持仓和逐次风险快照。风险偏好暂由确定性阈值表达，尚未建立组合级风险预算。后续优先使用 SQLite FTS5，再评估是否需要向量数据库。
 
 ## 7. Trace 架构
 
@@ -126,9 +148,18 @@ briefing.run
 │       └── tool.<name>
 ├── report.persist
 └── report.evaluate
+
+portfolio.risk_check
+├── agent.run
+│   └── agent.turn
+│       ├── gen_ai.chat
+│       ├── tool.read_skill
+│       └── tool.query_iwencai_market
+├── portfolio.position_check
+└── portfolio.alert（按需）
 ```
 
-Pi Agent 的事件订阅被映射为 turn、模型与工具 Span。模型 Span记录 provider、model、stop reason、输入/输出/cache/reasoning token 和成本。默认不把完整 Prompt、网页正文和工具参数写入 Trace，降低敏感数据暴露与存储膨胀。
+Pi Agent 的事件订阅被映射为 OpenInference `AGENT`、`LLM` 与 `TOOL` Span，工作流节点标记为 `CHAIN`。模型 Span 记录 provider、model、stop reason、输入/输出/cache/reasoning token 和成本。`TRACE_CONTENT_ENABLED=true` 时，Prompt、Response、工具参数和工具结果写入本机 Phoenix；设为 `false` 可只保留元数据。Trace 内容可能包含持仓和研究材料，不应对外暴露 Phoenix。
 
 CLI 是短生命周期进程，退出前调用 `forceFlush()`。Trace 导出失败只打印提示，不回滚成功日报。
 
@@ -151,7 +182,7 @@ CLI 是短生命周期进程，退出前调用 `forceFlush()`。Trace 导出失�
 - 飞书群机器人文本消息。
 - 企业微信群机器人文本消息。
 
-成功运行发送摘要、评估和报告正文；运行异常发送 critical 告警。未来的行情阈值、公告和地缘报警应使用确定性规则触发，Agent 负责解释影响，不由模型独立决定是否报警。
+日报成功运行发送摘要、评估和报告正文；持仓巡检只在风险首次出现、升级或超过 4 小时冷却期时发送提醒；运行异常发送 critical 告警。持仓规则由代码确定：亏损 5%/10%、日跌幅 4%/7%、下跌叠加主力流出、RSI 过热和数据缺失。Agent 负责解释影响，不由模型独立决定是否报警。
 
 ## 10. 运行拓扑
 
@@ -159,7 +190,7 @@ CLI 是短生命周期进程，退出前调用 `forceFlush()`。Trace 导出失�
 flowchart TB
     Terminal["系统命令 livermore"] --> Bootstrap["安装/启动协调器"]
     subgraph Mac["单台 macOS 主机"]
-      Launchd["5 个 launchd 日历触发器"]
+      Launchd["6 个 launchd 日历触发器"]
       PhoenixLaunchd["Phoenix launchd 常驻服务"]
       WebLaunchd["Agent Web launchd 常驻服务"]
       WebProcess["Node.js Agent Web :4310"]
@@ -185,7 +216,7 @@ flowchart TB
     Bootstrap --> PhoenixProcess
 ```
 
-Phoenix 安装在项目独立的 `.venv-phoenix/`，由 `launchd` 登录时启动并保持运行，不依赖 Docker daemon。默认工作日时间：市场简报 08:30、12:00、16:10；AI 产业链日报 08:45、17:00。`launchd` 使用系统时区，日报模式使用 `APP_TIMEZONE`，两者应保持一致。
+Phoenix 安装在项目独立的 `.venv-phoenix/`，由 `launchd` 登录时启动并保持运行，不依赖 Docker daemon。默认工作日时间：市场简报 08:30、12:00、16:10；AI 产业链日报 08:45、17:00；持仓巡检 09:30、10:30、11:30、13:30、14:30、15:00。`launchd` 使用系统时区，任务日期使用 `APP_TIMEZONE`，两者应保持一致。
 
 `~/.local/bin/livermore` 指向仓库中的轻量启动器。默认命令检查 Agent Web、Phoenix 和 launchd 注册状态，等待本地服务健康后，通过 macOS 打开 `http://127.0.0.1:4310`。Phoenix `http://localhost:6006` 只作为二级 Trace 观测台。
 
@@ -200,11 +231,12 @@ Phoenix 安装在项目独立的 `.venv-phoenix/`，由 `launchd` 登录时启�
 | Phoenix 未启动 | Trace flush 提示，业务任务继续 |
 | 飞书或企业微信失败 | 保存失败投递记录，任务保持原状态 |
 | 重复调度 | 幂等检查拒绝重复成功运行 |
+| 持仓行情缺失 | 保存 warning 快照并通过消息中心提示人工复核 |
 | 进程崩溃遗留锁 | 锁过期后可重新执行 |
 
 ## 12. 后续阶段
 
-1. 建立自选股、持仓、风险预算和关注事件模型。
+1. 在现有持仓模型上增加组合级风险预算、自选股和关注事件。
 2. 接入结构化行情 Provider，定义来源质量等级与时效 SLA。
 3. 增加任务缺失、连续失败和来源异常的本地健康巡检。
 4. 增加报警规则、确认状态、冷却期和误报反馈。

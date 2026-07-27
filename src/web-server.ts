@@ -6,11 +6,11 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import { createInvestmentAgent } from "./agent/create-investment-agent.js";
-import type { BriefingTask } from "./briefings/types.js";
 import { loadConfig } from "./config.js";
 import { observeAgent, Telemetry } from "./observability/telemetry.js";
 import { databasePath, projectRoot, reportsDirectory, webDirectory } from "./project-paths.js";
 import { InvestmentDatabase } from "./storage/database.js";
+import type { PortfolioPositionInput, TaskName } from "./storage/database.js";
 import { createReportTool } from "./tools/report-tool.js";
 import { createRuntimeTools, listSkillDescriptors } from "./tools/runtime-tools.js";
 
@@ -28,6 +28,7 @@ const sessions = new Map<string, ChatSession>();
 const taskSchedules = [
   { task: "market-briefing", title: "每日市场简报", schedule: "工作日 08:30 / 12:00 / 16:10" },
   { task: "ai-industry-chain", title: "AI 产业链日报", schedule: "工作日 08:45 / 17:00" },
+  { task: "portfolio-risk-check", title: "持仓风险巡检", schedule: "工作日 09:30—15:00 · 每小时" },
 ] as const;
 
 const server = createServer(async (request, response) => {
@@ -98,6 +99,20 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     });
   } else if (request.method === "GET" && url.pathname === "/api/capabilities") {
     sendJson(response, 200, await capabilitySnapshot(url.searchParams.get("refresh") === "true"));
+  } else if (request.method === "GET" && url.pathname === "/api/portfolio") {
+    sendJson(response, 200, { positions: database.listPositions() });
+  } else if (request.method === "POST" && url.pathname === "/api/portfolio") {
+    const input = parsePositionInput(await readJsonBody(request));
+    sendJson(response, 201, database.createPosition(input));
+  } else if (request.method === "PUT" && url.pathname.startsWith("/api/portfolio/")) {
+    const id = decodeURIComponent(url.pathname.slice("/api/portfolio/".length));
+    const updated = database.updatePosition(id, parsePositionInput(await readJsonBody(request)));
+    if (!updated) return sendJson(response, 404, { error: "Position not found." });
+    sendJson(response, 200, updated);
+  } else if (request.method === "DELETE" && url.pathname.startsWith("/api/portfolio/")) {
+    const id = decodeURIComponent(url.pathname.slice("/api/portfolio/".length));
+    if (!database.deletePosition(id)) return sendJson(response, 404, { error: "Position not found." });
+    sendJson(response, 200, { deleted: true });
   } else if (request.method === "GET" && url.pathname.startsWith("/api/runs/")) {
     const id = decodeURIComponent(url.pathname.slice("/api/runs/".length));
     const run = database.getRun(id);
@@ -106,8 +121,8 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     if (run.reportPath) report = await safeReadReport(run.reportPath);
     sendJson(response, 200, { ...run, evaluations: database.getRunEvaluations(id), report });
   } else if (request.method === "POST" && url.pathname.startsWith("/api/tasks/") && url.pathname.endsWith("/run")) {
-    const task = url.pathname.slice("/api/tasks/".length, -"/run".length) as BriefingTask;
-    if (task !== "market-briefing" && task !== "ai-industry-chain") {
+    const task = url.pathname.slice("/api/tasks/".length, -"/run".length) as TaskName;
+    if (task !== "market-briefing" && task !== "ai-industry-chain" && task !== "portfolio-risk-check") {
       return sendJson(response, 404, { error: "Unknown task." });
     }
     spawnTask(task);
@@ -161,6 +176,7 @@ async function chat(request: IncomingMessage, response: ServerResponse): Promise
 
   try {
     await telemetry.withSpan("agent.chat", {
+      "openinference.span.kind": "AGENT",
       "livermore.chat.session_id": sessionId,
       "livermore.chat.message_length": message.length,
     }, async (_span, activeContext) => {
@@ -243,21 +259,40 @@ async function capabilitySnapshot(refresh = false) {
   };
 }
 
-function spawnTask(task: BriefingTask): void {
-  const child = spawn(process.execPath, [
-    "--import",
-    "tsx",
-    path.join(projectRoot, "src", "briefing-cli.ts"),
-    "--task",
-    task,
-    "--force",
-  ], {
+function spawnTask(task: TaskName): void {
+  const argumentsByTask = task === "portfolio-risk-check"
+    ? ["--import", "tsx", path.join(projectRoot, "src", "portfolio-risk-cli.ts"), "--force"]
+    : ["--import", "tsx", path.join(projectRoot, "src", "briefing-cli.ts"), "--task", task, "--force"];
+  const child = spawn(process.execPath, argumentsByTask, {
     cwd: projectRoot,
     detached: true,
     stdio: "ignore",
     env: process.env,
   });
   child.unref();
+}
+
+function parsePositionInput(value: unknown): PortfolioPositionInput {
+  if (!value || typeof value !== "object") throw new Error("Position body must be an object.");
+  const input = value as Record<string, unknown>;
+  const symbol = String(input.symbol ?? "").trim().toUpperCase();
+  const quantity = Number(input.quantity);
+  const costBasis = Number(input.costBasis);
+  const purchasedAt = String(input.purchasedAt ?? "").trim();
+  if (!/^[A-Z0-9][A-Z0-9.-]{0,19}$/.test(symbol)) {
+    throw new Error("股票代码应为 1–20 位字母、数字、点或短横线。");
+  }
+  if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 1_000_000_000) {
+    throw new Error("持仓数量必须是大于 0 的有效数字。");
+  }
+  if (!Number.isFinite(costBasis) || costBasis <= 0 || costBasis > 100_000_000) {
+    throw new Error("买入成本必须是大于 0 的有效数字。");
+  }
+  const parsedDate = new Date(purchasedAt);
+  if (!purchasedAt || Number.isNaN(parsedDate.getTime()) || parsedDate.getTime() > Date.now() + 60_000) {
+    throw new Error("买入时间无效，且不能晚于当前时间。");
+  }
+  return { symbol, quantity, costBasis, purchasedAt: parsedDate.toISOString() };
 }
 
 async function serveStatic(pathname: string, response: ServerResponse): Promise<void> {

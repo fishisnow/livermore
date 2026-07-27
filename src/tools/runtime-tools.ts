@@ -1,11 +1,10 @@
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { Type } from "@sinclair/typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { AppConfig } from "../config.js";
+import { queryIwencai, iwencaiScriptPath } from "../market/iwencai-client.js";
 import { projectRoot, projectSkillsDirectory, reportsDirectory } from "../project-paths.js";
 import type { InvestmentDatabase } from "../storage/database.js";
 import { collectLiveSources } from "../briefings/source-provider.js";
@@ -18,14 +17,18 @@ export interface SkillDescriptor {
   location: string;
 }
 
+export interface RuntimeToolHooks {
+  onSkillRead?: (name: string, content: string) => void;
+  onIwencaiResult?: (query: string, result: unknown) => void;
+}
+
 let skillCache: { expiresAt: number; value: SkillDescriptor[] } | undefined;
-const execFileAsync = promisify(execFile);
-const iwencaiScript = path.join(projectSkillsDirectory, "hithink-market-query", "scripts", "cli.py");
 
 const listRunsParameters = Type.Object({
   task: Type.Optional(Type.Union([
     Type.Literal("market-briefing"),
     Type.Literal("ai-industry-chain"),
+    Type.Literal("portfolio-risk-check"),
   ])),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
 });
@@ -43,17 +46,30 @@ const skillParameters = Type.Object({
   name: Type.String({ minLength: 1, maxLength: 120 }),
 });
 
-export function createRuntimeTools(config: AppConfig, database: InvestmentDatabase): AgentTool<any>[] {
+export function createRuntimeTools(
+  config: AppConfig,
+  database: InvestmentDatabase,
+  hooks: RuntimeToolHooks = {},
+): AgentTool<any>[] {
   const tools: AgentTool<any>[] = [
     {
       name: "list_task_runs",
       label: "List task runs",
-      description: "List recent local market briefing and AI industry chain task runs, including status, timing, source count, token usage, cost, and trace ID.",
+      description: "List recent local market briefing, AI industry chain, and portfolio risk-check runs, including status, timing, item count, warnings, token usage, cost, and trace ID.",
       parameters: listRunsParameters,
       async execute(_id, rawParams) {
-        const params = rawParams as { task?: "market-briefing" | "ai-industry-chain"; limit?: number };
+        const params = rawParams as { task?: "market-briefing" | "ai-industry-chain" | "portfolio-risk-check"; limit?: number };
         const runs = database.listRuns(params.limit ?? 10, params.task);
         return textResult(JSON.stringify(runs, null, 2));
+      },
+    },
+    {
+      name: "list_portfolio_positions",
+      label: "List portfolio positions",
+      description: "List the user's locally maintained portfolio positions and their latest saved risk-check snapshot. This is read-only.",
+      parameters: Type.Object({}),
+      async execute() {
+        return textResult(JSON.stringify(database.listPositions(), null, 2));
       },
     },
     {
@@ -105,7 +121,7 @@ export function createRuntimeTools(config: AppConfig, database: InvestmentDataba
         })), null, 2));
       },
     },
-    ...(existsSync(iwencaiScript) ? [{
+    ...(existsSync(iwencaiScriptPath) ? [{
       name: "query_iwencai_market",
       label: "Query Iwencai market data",
       description: "Query current stock, ETF, index, price, turnover, fund-flow, or technical-indicator data through the installed hithink-market-query skill. Use this instead of web search for structured market quotes.",
@@ -121,26 +137,11 @@ export function createRuntimeTools(config: AppConfig, database: InvestmentDataba
           return textResult("IWENCAI_API_KEY is not configured in Livermore's local .env.", true);
         }
         try {
-          const { stdout } = await execFileAsync("/usr/bin/python3", [
-            iwencaiScript,
-            "--query", params.query,
-            "--page", String(params.page ?? 1),
-            "--limit", String(params.limit ?? 10),
-            "--call-type", params.retry ? "retry" : "normal",
-          ], {
-            cwd: path.dirname(iwencaiScript),
-            env: {
-              ...process.env,
-              IWENCAI_BASE_URL: config.iwencaiBaseUrl,
-              IWENCAI_API_KEY: config.iwencaiApiKey,
-            },
-            timeout: 35_000,
-            maxBuffer: 2 * 1024 * 1024,
-          });
-          return textResult(stdout.trim());
+          const result = await queryIwencai(config, params);
+          hooks.onIwencaiResult?.(params.query, result);
+          return textResult(JSON.stringify(result, null, 2));
         } catch (error) {
-          const detail = commandOutput(error);
-          return textResult(detail || `Iwencai market query failed: ${errorMessage(error)}`, true);
+          return textResult(errorMessage(error), true);
         }
       },
     } satisfies AgentTool<any>] : []),
@@ -170,6 +171,7 @@ export function createRuntimeTools(config: AppConfig, database: InvestmentDataba
         const matches = skills.filter((skill) => skill.name === params.name);
         if (matches.length === 0) return textResult(`Skill not found: ${params.name}`, true);
         const content = await readFile(matches[0]!.path, "utf8");
+        hooks.onSkillRead?.(params.name, content);
         return textResult(content.slice(0, 30_000));
       },
     },
@@ -244,12 +246,6 @@ function textResult(text: string, isError = false) {
     details: {},
     ...(isError ? { isError: true } : {}),
   };
-}
-
-function commandOutput(error: unknown): string {
-  if (!error || typeof error !== "object") return "";
-  const value = error as { stdout?: string | Buffer; stderr?: string | Buffer };
-  return String(value.stdout || value.stderr || "").trim().slice(0, 50_000);
 }
 
 function errorMessage(error: unknown): string {

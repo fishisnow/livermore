@@ -75,6 +75,7 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
     if (!locked) throw new Error(`Task ${options.task} is already running.`);
 
     const result = await telemetry.withSpan("briefing.run", {
+      "openinference.span.kind": "CHAIN",
       "livermore.run.id": runId,
       "livermore.task": options.task,
       "livermore.mode": mode,
@@ -87,6 +88,7 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
       if (traceId) database.setTraceId(runId, traceId);
 
       const collection = await telemetry.withSpan("source.collect", {
+        "openinference.span.kind": "CHAIN",
         "livermore.task": options.task,
       }, async (span) => {
         const collected = options.replayPath
@@ -98,6 +100,7 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
       });
 
       const sources = await telemetry.withSpan("source.deduplicate", {
+        "openinference.span.kind": "CHAIN",
         "livermore.source.input_count": collection.sources.length,
       }, async (span) => {
         const unseen = database.unseenSources(options.task, localDate, collection.sources);
@@ -108,6 +111,7 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
       const generated = sources.length === 0
         ? { content: emptyReport(options.task, mode, localDate, localTime), usage: zeroUsage() }
         : await telemetry.withSpan("agent.run", {
+          "openinference.span.kind": "AGENT",
           "livermore.task": options.task,
           "livermore.source.count": sources.length,
         }, async (_span, agentContext) => generateReport(options, definition.buildPrompt({
@@ -118,7 +122,9 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
           sources,
         }), telemetry, agentContext));
 
-      const reportPath = await telemetry.withSpan("report.persist", {}, async () => {
+      const reportPath = await telemetry.withSpan("report.persist", {
+        "openinference.span.kind": "TOOL",
+      }, async () => {
         await mkdir(reportsDirectory, { recursive: true });
         const filename = `${localDate}-${localTime}-${options.task}-${runId.slice(0, 8)}.md`;
         const target = path.join(reportsDirectory, filename);
@@ -127,7 +133,9 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
         return target;
       });
 
-      const evaluations = await telemetry.withSpan("report.evaluate", {}, async (span) => {
+      const evaluations = await telemetry.withSpan("report.evaluate", {
+        "openinference.span.kind": "CHAIN",
+      }, async (span) => {
         const values = evaluateBriefing(options.task, generated.content, sources);
         for (const value of values) {
           database.saveEvaluation(runId, value.evaluator, value.score, value.label, value.explanation);
@@ -147,7 +155,9 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
 
       if (options.config.notifyOnSuccess) {
         const evaluationSummary = evaluations.map((item) => `${item.evaluator}: ${item.label} (${item.score.toFixed(2)})`).join("\n");
-        await telemetry.withSpan("notification.deliver", {}, async () => publishSafely(messageCenter, {
+        await telemetry.withSpan("notification.deliver", {
+          "openinference.span.kind": "TOOL",
+        }, async () => publishSafely(messageCenter, {
           runId,
           severity: evaluations.some((item) => item.label === "fail") || collection.warnings.length > 0 ? "warning" : "info",
           title: `Livermore 任务完成：${definition.title}`,
@@ -205,7 +215,9 @@ async function collectLive(
   let mcpSources: SourceItem[] = [];
   if (options.config.tavilyMcpEnabled && options.config.tavilyApiKey) {
     try {
-      mcpSources = await telemetry.withSpan("tavily.mcp.search", {}, async () => collectLiveSources(
+      mcpSources = await telemetry.withSpan("tavily.mcp.search", {
+        "openinference.span.kind": "TOOL",
+      }, async () => collectLiveSources(
         definition,
         options.config.tavilyMcpUrl,
         options.config.tavilyApiKey!,
@@ -221,7 +233,9 @@ async function collectLive(
     warnings.push("TAVILY_API_KEY is not configured; using direct web sources only.");
   }
 
-  const direct = await telemetry.withSpan("source.direct.fetch", {}, async () => collectDirectSources(options.task, now));
+  const direct = await telemetry.withSpan("source.direct.fetch", {
+    "openinference.span.kind": "TOOL",
+  }, async () => collectDirectSources(options.task, now));
   if (direct.failures.length > 0) warnings.push(`Direct source failures: ${direct.failures.join("; ")}`);
   const sources = [...new Map([...mcpSources, ...direct.sources].map((source) => [source.id, source])).values()];
   if (sources.length === 0) throw new Error(`No live sources could be collected. ${warnings.join(" ")}`);

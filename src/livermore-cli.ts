@@ -34,7 +34,8 @@ try {
     await printStatus();
   } else if (command === "run") {
     const task = normalizeTask(args[0]);
-    runProjectCli("briefing-cli.ts", ["--task", task, ...args.slice(1)]);
+    if (task === "portfolio-risk-check") runProjectCli("portfolio-risk-cli.ts", args.slice(1));
+    else runProjectCli("briefing-cli.ts", ["--task", task, ...args.slice(1)]);
   } else if (command === "runs") {
     runProjectCli("runs-cli.ts", args);
   } else if (command === "skills") {
@@ -87,6 +88,7 @@ async function schedulesInstalled(): Promise<boolean> {
     "com.livermore.market-intraday",
     "com.livermore.market-close",
     "com.livermore.ai-close",
+    "com.livermore.portfolio-risk",
   ];
   try {
     await Promise.all(labels.map((label) => access(path.join(homedir(), "Library", "LaunchAgents", `${label}.plist`))));
@@ -165,10 +167,11 @@ function runProjectCli(filename: string, cliArgs: string[]): void {
   if (result.status !== 0) throw new Error(`${filename} 执行失败。`);
 }
 
-function normalizeTask(value: string | undefined): "market-briefing" | "ai-industry-chain" {
+function normalizeTask(value: string | undefined): "market-briefing" | "ai-industry-chain" | "portfolio-risk-check" {
   if (value === "market" || value === "market-briefing") return "market-briefing";
   if (value === "ai" || value === "ai-industry-chain") return "ai-industry-chain";
-  throw new Error("Usage: livermore run <market|ai> [--force]");
+  if (value === "portfolio" || value === "portfolio-risk-check") return "portfolio-risk-check";
+  throw new Error("Usage: livermore run <market|ai|portfolio> [--force]");
 }
 
 async function printSkills(): Promise<void> {
@@ -237,6 +240,7 @@ function helpText(): string {
   livermore status           查看服务状态和最近运行
   livermore run market       立即运行市场简报
   livermore run ai           立即运行 AI 产业链日报
+  livermore run portfolio    立即运行持仓风险巡检
   livermore runs             查询任务运行记录
   livermore skills           列出 Livermore 项目 Skills
   livermore skill install <name>  安装一个 Iwencai SkillHub Skill

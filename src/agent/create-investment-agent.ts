@@ -9,6 +9,7 @@ import { createReportTool } from "../tools/report-tool.js";
 export interface InvestmentAgentOptions {
   tools?: AgentTool<any>[];
   systemPromptAppend?: string;
+  includeReportTool?: boolean;
 }
 
 export async function createInvestmentAgent(config: AppConfig, options: InvestmentAgentOptions = {}): Promise<Agent> {
@@ -24,7 +25,10 @@ export async function createInvestmentAgent(config: AppConfig, options: Investme
     await readFile(systemPromptPath, "utf8"),
     options.systemPromptAppend?.trim(),
   ].filter(Boolean).join("\n\n");
-  const tools = [createReportTool(), ...(options.tools ?? [])];
+  const tools = [
+    ...(options.includeReportTool === false ? [] : [createReportTool()]),
+    ...(options.tools ?? []),
+  ];
   const allowed = new Set(tools.map((tool) => tool.name));
   return new Agent({
     initialState: {

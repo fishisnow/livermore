@@ -2,6 +2,7 @@ const state = {
   sessionId: localStorage.getItem("livermore.sessionId") || "",
   sending: false,
   dashboard: null,
+  positions: [],
 };
 
 const elements = {
@@ -21,6 +22,10 @@ const elements = {
   dialogMeta: document.querySelector("#dialog-meta"),
   dialogEvaluations: document.querySelector("#dialog-evaluations"),
   dialogReport: document.querySelector("#dialog-report"),
+  portfolioDialog: document.querySelector("#portfolio-dialog"),
+  portfolioRows: document.querySelector("#portfolio-rows"),
+  portfolioEmpty: document.querySelector("#portfolio-empty"),
+  positionForm: document.querySelector("#position-form"),
   capabilityDialog: document.querySelector("#capability-dialog"),
   skillLedger: document.querySelector("#skill-ledger"),
   mcpLedger: document.querySelector("#mcp-ledger"),
@@ -65,6 +70,11 @@ document.querySelector("#view-all-runs").addEventListener("click", () => {
   showToast("这里显示最近 12 次运行，可点击查看报告");
 });
 document.querySelector("#close-dialog").addEventListener("click", () => elements.dialog.close());
+document.querySelector("#portfolio-open").addEventListener("click", openPortfolio);
+document.querySelector("#close-portfolio-dialog").addEventListener("click", () => elements.portfolioDialog.close());
+document.querySelector("#position-form").addEventListener("submit", savePosition);
+document.querySelector("#cancel-position-edit").addEventListener("click", resetPositionForm);
+document.querySelector("#run-portfolio-check").addEventListener("click", runPortfolioCheck);
 document.querySelector("#capability-details").addEventListener("click", () => openCapabilities(true));
 document.querySelector("#close-capability-dialog").addEventListener("click", () => elements.capabilityDialog.close());
 document.querySelector("#refresh-capabilities").addEventListener("click", () => openCapabilities(true));
@@ -98,9 +108,9 @@ function renderDashboard(data) {
         </div>
         <p class="task-schedule">${escapeHtml(task.schedule)}</p>
         <div class="task-facts">
-          <span>${run ? `${run.sourceCount} 来源` : "尚无运行"}</span>
+          <span>${run ? task.task === "portfolio-risk-check" ? `${run.sourceCount} 持仓` : `${run.sourceCount} 来源` : "尚无运行"}</span>
           <span>${run?.durationMs != null ? formatDuration(run.durationMs) : "—"}</span>
-          <span>${run ? `${run.inputTokens + run.outputTokens} tok` : "—"}</span>
+          <span>${run ? task.task === "portfolio-risk-check" ? `${run.warningCount} 风险` : `${run.inputTokens + run.outputTokens} tok` : "—"}</span>
         </div>
         <div class="task-actions">
           <button class="run-now" data-run-task="${escapeHtml(task.task)}">立即运行</button>
@@ -139,6 +149,154 @@ function renderDashboard(data) {
   elements.capabilities.innerHTML = capabilities
     .map(([label, active]) => `<span class="capability ${active ? "active" : ""}">${escapeHtml(label)}</span>`)
     .join("");
+}
+
+async function openPortfolio() {
+  if (!elements.portfolioDialog.open) elements.portfolioDialog.showModal();
+  if (!document.querySelector("#position-purchased-at").value) {
+    document.querySelector("#position-purchased-at").value = toDateTimeLocal(new Date());
+  }
+  await loadPortfolio();
+}
+
+async function loadPortfolio() {
+  try {
+    const response = await fetch("/api/portfolio");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    state.positions = data.positions;
+    renderPortfolio(data.positions);
+  } catch (error) {
+    showToast(`持仓读取失败：${error.message}`);
+  }
+}
+
+function renderPortfolio(positions) {
+  const warningCount = positions.filter((item) => item.severity === "warning").length;
+  const criticalCount = positions.filter((item) => item.severity === "critical").length;
+  document.querySelector("#portfolio-count").textContent = String(positions.length);
+  document.querySelector("#portfolio-warning-count").textContent = String(warningCount);
+  document.querySelector("#portfolio-critical-count").textContent = String(criticalCount);
+  const lastChecked = positions.map((item) => item.lastCheckedAt).filter(Boolean).sort().at(-1);
+  document.querySelector("#portfolio-last-check").textContent = lastChecked
+    ? `最近巡检 ${formatDate(lastChecked)}`
+    : "尚未执行风险巡检";
+  elements.portfolioEmpty.hidden = positions.length > 0;
+  elements.portfolioRows.innerHTML = positions.map((position) => `
+    <tr>
+      <td data-label="标的">
+        <strong>${escapeHtml(position.latestName || position.symbol)}</strong>
+        <small>${escapeHtml(position.symbol)} · ${formatPurchaseDate(position.purchasedAt)} 买入</small>
+      </td>
+      <td data-label="数量">${formatQuantity(position.quantity)}</td>
+      <td data-label="成本">${formatPrice(position.costBasis)}</td>
+      <td data-label="最新价">${position.latestPrice == null ? "—" : formatPrice(position.latestPrice)}</td>
+      <td data-label="持仓盈亏" class="${changeClass(position.pnlPct)}">${formatChange(position.pnlPct)}</td>
+      <td data-label="当日" class="${changeClass(position.dayChangePct)}">${formatChange(position.dayChangePct)}</td>
+      <td data-label="风险状态">
+        <span class="risk-badge ${escapeHtml(position.severity || "unchecked")}">${riskLabel(position.severity)}</span>
+        <small class="risk-summary">${escapeHtml(position.riskSummary || "等待首次巡检")}</small>
+      </td>
+      <td class="position-actions">
+        <button type="button" data-edit-position="${escapeHtml(position.id)}">修改</button>
+        <button type="button" data-delete-position="${escapeHtml(position.id)}">删除</button>
+      </td>
+    </tr>
+  `).join("");
+  elements.portfolioRows.querySelectorAll("[data-edit-position]").forEach((button) => {
+    button.addEventListener("click", () => editPosition(button.dataset.editPosition));
+  });
+  elements.portfolioRows.querySelectorAll("[data-delete-position]").forEach((button) => {
+    button.addEventListener("click", () => deletePosition(button.dataset.deletePosition));
+  });
+}
+
+async function savePosition(event) {
+  event.preventDefault();
+  const id = document.querySelector("#position-id").value;
+  const button = document.querySelector("#save-position");
+  button.disabled = true;
+  try {
+    const purchasedAt = new Date(document.querySelector("#position-purchased-at").value);
+    if (Number.isNaN(purchasedAt.getTime())) throw new Error("买入时间无效");
+    const payload = {
+      symbol: document.querySelector("#position-symbol").value.trim(),
+      quantity: Number(document.querySelector("#position-quantity").value),
+      purchasedAt: purchasedAt.toISOString(),
+      costBasis: Number(document.querySelector("#position-cost").value),
+    };
+    const response = await fetch(id ? `/api/portfolio/${encodeURIComponent(id)}` : "/api/portfolio", {
+      method: id ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    showToast(id ? "持仓已更新" : "持仓已添加");
+    resetPositionForm();
+    await loadPortfolio();
+  } catch (error) {
+    showToast(`保存失败：${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function editPosition(id) {
+  const position = state.positions.find((item) => item.id === id);
+  if (!position) return;
+  document.querySelector("#position-id").value = position.id;
+  document.querySelector("#position-symbol").value = position.symbol;
+  document.querySelector("#position-quantity").value = String(position.quantity);
+  document.querySelector("#position-purchased-at").value = toDateTimeLocal(new Date(position.purchasedAt));
+  document.querySelector("#position-cost").value = String(position.costBasis);
+  document.querySelector("#save-position").textContent = "保存修改";
+  document.querySelector("#cancel-position-edit").hidden = false;
+  document.querySelector("#position-symbol").focus();
+}
+
+function resetPositionForm() {
+  elements.positionForm.reset();
+  document.querySelector("#position-id").value = "";
+  document.querySelector("#position-purchased-at").value = toDateTimeLocal(new Date());
+  document.querySelector("#save-position").textContent = "添加持仓";
+  document.querySelector("#cancel-position-edit").hidden = true;
+}
+
+async function deletePosition(id) {
+  const position = state.positions.find((item) => item.id === id);
+  if (!position || !window.confirm(`删除持仓 ${position.latestName || position.symbol}？历史巡检快照也会一并删除。`)) return;
+  try {
+    const response = await fetch(`/api/portfolio/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.error || `HTTP ${response.status}`);
+    }
+    showToast("持仓已删除");
+    await loadPortfolio();
+  } catch (error) {
+    showToast(`删除失败：${error.message}`);
+  }
+}
+
+async function runPortfolioCheck() {
+  const button = document.querySelector("#run-portfolio-check");
+  button.disabled = true;
+  button.textContent = "巡检已启动";
+  try {
+    const response = await fetch("/api/tasks/portfolio-risk-check/run", { method: "POST" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    showToast("持仓风险巡检已开始");
+    setTimeout(async () => {
+      await Promise.all([loadPortfolio(), loadDashboard()]);
+      button.disabled = false;
+      button.textContent = "立即巡检";
+    }, 3500);
+  } catch (error) {
+    showToast(`巡检启动失败：${error.message}`);
+    button.disabled = false;
+    button.textContent = "立即巡检";
+  }
 }
 
 async function openCapabilities(refresh = false) {
@@ -530,11 +688,13 @@ function statusLabel(status) {
 }
 
 function taskShortName(task) {
-  return task === "market-briefing" ? "市场简报" : "AI 产业链";
+  if (task === "market-briefing") return "市场简报";
+  if (task === "portfolio-risk-check") return "持仓巡检";
+  return "AI 产业链";
 }
 
 function modeLabel(mode) {
-  return ({ "pre-market": "早盘", intraday: "盘中", close: "收盘" })[mode] || mode;
+  return ({ "pre-market": "早盘", intraday: "盘中", close: "收盘", hourly: "小时巡检" })[mode] || mode;
 }
 
 function formatDuration(ms) {
@@ -555,6 +715,38 @@ function relativeTime(value) {
   if (minutes < 60) return `${minutes} 分钟前`;
   if (minutes < 1440) return `${Math.round(minutes / 60)} 小时前`;
   return `${Math.round(minutes / 1440)} 天前`;
+}
+
+function toDateTimeLocal(date) {
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function formatPurchaseDate(value) {
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" })
+    .format(new Date(value));
+}
+
+function formatQuantity(value) {
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 4 }).format(value);
+}
+
+function formatPrice(value) {
+  return new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value);
+}
+
+function formatChange(value) {
+  if (value == null) return "—";
+  return `${value >= 0 ? "+" : ""}${Number(value).toFixed(2)}%`;
+}
+
+function changeClass(value) {
+  if (value == null || Number(value) === 0) return "";
+  return Number(value) > 0 ? "positive" : "negative";
+}
+
+function riskLabel(value) {
+  return ({ normal: "正常", warning: "警告", critical: "严重", unchecked: "待巡检" })[value || "unchecked"];
 }
 
 function toolLabel(name) {

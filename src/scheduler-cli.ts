@@ -6,17 +6,32 @@ import { phoenixDataDirectory, phoenixExecutable, projectRoot } from "./project-
 
 interface Schedule {
   label: string;
-  task: "market-briefing" | "ai-industry-chain";
-  hour: number;
-  minute: number;
+  entrypoint: string;
+  args: string[];
+  times: Array<{ hour: number; minute: number }>;
+  description: string;
 }
 
 const schedules: Schedule[] = [
-  { label: "market-pre", task: "market-briefing", hour: 8, minute: 30 },
-  { label: "ai-pre", task: "ai-industry-chain", hour: 8, minute: 45 },
-  { label: "market-intraday", task: "market-briefing", hour: 12, minute: 0 },
-  { label: "market-close", task: "market-briefing", hour: 16, minute: 10 },
-  { label: "ai-close", task: "ai-industry-chain", hour: 17, minute: 0 },
+  briefingSchedule("market-pre", "market-briefing", 8, 30),
+  briefingSchedule("ai-pre", "ai-industry-chain", 8, 45),
+  briefingSchedule("market-intraday", "market-briefing", 12, 0),
+  briefingSchedule("market-close", "market-briefing", 16, 10),
+  briefingSchedule("ai-close", "ai-industry-chain", 17, 0),
+  {
+    label: "portfolio-risk",
+    entrypoint: "portfolio-risk-cli.ts",
+    args: [],
+    times: [
+      { hour: 9, minute: 30 },
+      { hour: 10, minute: 30 },
+      { hour: 11, minute: 30 },
+      { hour: 13, minute: 30 },
+      { hour: 14, minute: 30 },
+      { hour: 15, minute: 0 },
+    ],
+    description: "工作日 09:30 / 10:30 / 11:30 / 13:30 / 14:30 / 15:00",
+  },
 ];
 
 const command = process.argv[2];
@@ -52,7 +67,7 @@ if (command !== "install" && command !== "uninstall") {
     }
     await writeFile(filename, plist(label, schedule), "utf8");
     execFileSync("launchctl", ["bootstrap", domain, filename], { stdio: "inherit" });
-    console.log(`已安装 ${label}：工作日 ${pad(schedule.hour)}:${pad(schedule.minute)}`);
+    console.log(`已安装 ${label}：${schedule.description}`);
   }
 }
 
@@ -138,7 +153,7 @@ function phoenixPlist(label: string): string {
 }
 
 function plist(label: string, schedule: Schedule): string {
-  const cliPath = path.join(projectRoot, "src", "briefing-cli.ts");
+  const cliPath = path.join(projectRoot, "src", schedule.entrypoint);
   const logs = path.join(projectRoot, "data", "runtime");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -146,16 +161,31 @@ function plist(label: string, schedule: Schedule): string {
   <key>Label</key><string>${label}</string>
   <key>ProgramArguments</key><array>
     <string>${xml(process.execPath)}</string><string>--import</string><string>tsx</string>
-    <string>${xml(cliPath)}</string><string>--task</string><string>${schedule.task}</string>
+    <string>${xml(cliPath)}</string>${schedule.args.map((argument) => `<string>${xml(argument)}</string>`).join("")}
   </array>
   <key>WorkingDirectory</key><string>${xml(projectRoot)}</string>
   <key>StartCalendarInterval</key><array>
-    ${[1, 2, 3, 4, 5].map((weekday) => `<dict><key>Weekday</key><integer>${weekday}</integer><key>Hour</key><integer>${schedule.hour}</integer><key>Minute</key><integer>${schedule.minute}</integer></dict>`).join("\n    ")}
+    ${schedule.times.flatMap((time) => [1, 2, 3, 4, 5].map((weekday) => `<dict><key>Weekday</key><integer>${weekday}</integer><key>Hour</key><integer>${time.hour}</integer><key>Minute</key><integer>${time.minute}</integer></dict>`)).join("\n    ")}
   </array>
   <key>StandardOutPath</key><string>${xml(path.join(logs, `${schedule.label}.log`))}</string>
   <key>StandardErrorPath</key><string>${xml(path.join(logs, `${schedule.label}.error.log`))}</string>
   <key>ProcessType</key><string>Background</string>
 </dict></plist>\n`;
+}
+
+function briefingSchedule(
+  label: string,
+  task: "market-briefing" | "ai-industry-chain",
+  hour: number,
+  minute: number,
+): Schedule {
+  return {
+    label,
+    entrypoint: "briefing-cli.ts",
+    args: ["--task", task],
+    times: [{ hour, minute }],
+    description: `工作日 ${pad(hour)}:${pad(minute)}`,
+  };
 }
 
 function xml(value: string): string {

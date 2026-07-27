@@ -10,6 +10,7 @@ Livermore 是运行在个人电脑上的长期投资研究 Agent。它定时采�
 
 - 每日市场简报：工作日 08:30、12:00、16:10。
 - AI 产业链日报：工作日 08:45、17:00。
+- 持仓风险巡检：由用户维护持仓，交易时段 09:30—15:00 每小时检查一次。
 - 弹性数据采集：优先使用 Tavily Remote MCP，失败时使用公开网页来源。
 - 确定性评估：检查来源编号、核心主题覆盖和研究免责声明。
 - 运行可追踪：每次任务生成 `run_id` 和 OpenTelemetry `trace_id`。
@@ -30,7 +31,7 @@ node bin/install.mjs
 livermore
 ```
 
-它会打开 `http://127.0.0.1:4310` 的 Agent Web：主区域是基于 Pi 的持续对话，右侧展示两个定时任务、最近运行、报告质量、能力账本和 Trace 入口。能力账本只展示 Livermore 实际可用的项目 Skills、MCP、数据连接和内置工具，不混入 Codex 的全局能力。
+它会打开 `http://127.0.0.1:4310` 的 Agent Web：主区域是基于 Pi 的持续对话，右侧展示三个定时任务、最近运行、报告质量、能力账本和 Trace 入口。顶部“持仓”入口用于手工维护股票代码、持仓数量、买入时间和买入成本，并查看最近一次风险巡检结果。能力账本只展示 Livermore 实际可用的项目 Skills、MCP、数据连接和内置工具，不混入 Codex 的全局能力。
 
 Livermore 专属 Skill 安装在项目的 `skills/` 目录，并在对话中按需读取。例如：
 
@@ -46,6 +47,7 @@ livermore skill install hithink-market-query
 livermore status
 livermore run market
 livermore run ai
+livermore run portfolio
 livermore runs
 livermore traces
 livermore uninstall-services
@@ -87,6 +89,7 @@ npm run phoenix -- start
 ```bash
 npm run briefing -- --task market-briefing
 npm run briefing -- --task ai-industry-chain
+npm run portfolio:risk
 ```
 
 同一任务、日期和运行模式成功后会阻止重复执行。需要明确重跑时使用：
@@ -101,7 +104,19 @@ npm run briefing -- --task market-briefing --force
 npm run scheduler -- install
 ```
 
-该命令会让 `launchd` 在登录后自动启动并保持 Agent Web 与 Phoenix 运行，同时安装五个日报触发器；不需要手工保持终端窗口。
+该命令会让 `launchd` 在登录后自动启动并保持 Agent Web 与 Phoenix 运行，同时安装五个日报触发器和一个持仓巡检触发器；不需要手工保持终端窗口。
+
+持仓巡检在工作日 09:30、10:30、11:30、13:30、14:30、15:00 执行，避开 A 股午间休市。当前由 `launchd` 按周一至周五触发，法定休市日不执行交易，但仍可能产生一次行情新鲜度不足的检查记录。
+
+## 持仓风险规则
+
+持仓完全由用户在 Agent Web 中手工维护，Livermore 不读取券商账户，也不会下单。每次巡检启动一个短生命周期 Pi Agent：Agent 先读取项目安装的 `hithink-market-query` Skill，再调用 `query_iwencai_market` 获取最新价、当日涨跌、主力净流入、RSI 和 MACD，并生成辅助研判。代码从工具原始结果重新提取行情、计算相对买入成本的盈亏并执行硬风险规则，模型不能覆盖最终等级。
+
+- 警告：持仓亏损达到 5%、当日跌幅达到 4%、下跌且主力净流出、RSI 达到 80，或行情查询失败。
+- 严重：持仓亏损达到 10%，或当日跌幅达到 7%。
+- 报警抑制：风险首次出现或升级时立即通知；同等级风险最多每 4 小时重复一次。
+
+巡检结果写入 SQLite、Markdown 报告和 Trace；风险通过消息中心投递到已配置的飞书或企业微信。规则只用于提示人工复核，不构成自动止损建议。持仓为空时不会产生无意义的模型调用。
 
 移除定时任务：
 
@@ -184,6 +199,7 @@ npm run briefing -- \
 | `TAVILY_API_KEY` | 空 | Tavily API 密钥 |
 | `SEARCH_MAX_RESULTS` | `5` | 单次搜索结果数，范围 5–20 |
 | `TRACING_ENABLED` | `true` | 是否采集 OpenTelemetry Trace |
+| `TRACE_CONTENT_ENABLED` | `true` | 是否把 Prompt、Response、工具参数和结果写入本机 Phoenix |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Phoenix 本地端点 | OTLP HTTP Trace 地址 |
 | `PHOENIX_UI_URL` | `http://localhost:6006` | 运行查询提示地址 |
 | `LIVERMORE_WEB_PORT` | `4310` | 本地 Agent Web 监听端口 |
@@ -197,7 +213,7 @@ npm run briefing -- \
 ## 数据目录
 
 ```text
-data/livermore.db       任务、来源、报告、评估与告警账本
+data/livermore.db       任务、持仓、风险快照、来源、报告、评估与告警账本
 data/reports/           Markdown 研究报告
 data/phoenix/           Phoenix Trace 数据
 data/runtime/           launchd 标准输出和错误日志

@@ -1,7 +1,7 @@
 import { loadConfig } from "./config.js";
 import { databasePath } from "./project-paths.js";
 import { InvestmentDatabase } from "./storage/database.js";
-import type { BriefingTask } from "./briefings/types.js";
+import type { TaskName } from "./storage/database.js";
 
 const args = parseArgs(process.argv.slice(2));
 const database = new InvestmentDatabase(databasePath);
@@ -34,18 +34,20 @@ try {
   database.close();
 }
 
-function parseArgs(argv: string[]): { runId?: string; task?: BriefingTask; limit: number } {
+function parseArgs(argv: string[]): { runId?: string; task?: TaskName; limit: number } {
   let runId: string | undefined;
-  let task: BriefingTask | undefined;
+  let task: TaskName | undefined;
   let limit = 20;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--run") runId = value(argv, ++index, argument);
-    else if (argument === "--task") task = value(argv, ++index, argument) as BriefingTask;
+    else if (argument === "--task") task = value(argv, ++index, argument) as TaskName;
     else if (argument === "--limit") limit = Number.parseInt(value(argv, ++index, argument), 10);
     else throw new Error(`Unknown argument: ${argument}`);
   }
-  if (task && task !== "market-briefing" && task !== "ai-industry-chain") throw new Error(`Unknown task: ${task}`);
+  if (task && task !== "market-briefing" && task !== "ai-industry-chain" && task !== "portfolio-risk-check") {
+    throw new Error(`Unknown task: ${task}`);
+  }
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error("--limit must be between 1 and 200.");
   return {
     ...(runId ? { runId } : {}),

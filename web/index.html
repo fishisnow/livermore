@@ -18,6 +18,11 @@
         </div>
       </div>
       <div class="system-line">
+        <button class="portfolio-open" id="portfolio-open" type="button">
+          <span class="portfolio-open-dot" aria-hidden="true"></span>
+          持仓
+        </button>
+        <span class="divider"></span>
         <span class="live-dot" aria-hidden="true"></span>
         <span id="system-status">正在连接本地服务</span>
         <span class="divider"></span>
@@ -41,7 +46,7 @@
             <div class="prompt-grid">
               <button type="button" data-prompt="总结最近一次市场简报的关键结论、来源质量和待验证风险。">复盘最近市场简报</button>
               <button type="button" data-prompt="查看最近一次 AI 产业链日报，找出可能传导到 A/H 股的投资线索，并区分事实与推断。">寻找 AI 产业链线索</button>
-              <button type="button" data-prompt="检查最近运行的两个任务：哪些成功、哪些有警告，耗时和来源数量如何？">检查任务运行质量</button>
+              <button type="button" data-prompt="检查最近运行的三个任务：哪些成功、哪些有警告，耗时、来源或持仓数量如何？">检查任务运行质量</button>
               <button type="button" data-prompt="列出当前可用的 skills，并说明哪些适合辅助投资研究。">查看可用 Skills</button>
             </div>
           </div>
@@ -109,6 +114,70 @@
     <div id="dialog-meta" class="dialog-meta"></div>
     <div id="dialog-evaluations" class="evaluation-list"></div>
     <article id="dialog-report" class="report"></article>
+  </dialog>
+
+  <dialog id="portfolio-dialog" class="portfolio-dialog">
+    <div class="dialog-head portfolio-dialog-head">
+      <div>
+        <p class="eyebrow">Risk watch</p>
+        <h2>持仓与风险哨兵</h2>
+      </div>
+      <div class="dialog-head-actions">
+        <button class="secondary-action" id="run-portfolio-check" type="button">立即巡检</button>
+        <button class="icon-button" id="close-portfolio-dialog" type="button" aria-label="关闭">×</button>
+      </div>
+    </div>
+    <div class="portfolio-summary" id="portfolio-summary">
+      <div><span>持仓</span><strong id="portfolio-count">0</strong></div>
+      <div><span>警告</span><strong id="portfolio-warning-count">0</strong></div>
+      <div><span>严重</span><strong id="portfolio-critical-count">0</strong></div>
+      <p id="portfolio-last-check">尚未执行风险巡检</p>
+    </div>
+    <form class="position-form" id="position-form">
+      <input id="position-id" type="hidden">
+      <div>
+        <label for="position-symbol">股票代码</label>
+        <input id="position-symbol" name="symbol" maxlength="20" autocomplete="off" placeholder="例如 600519" required>
+      </div>
+      <div>
+        <label for="position-quantity">持仓数量</label>
+        <input id="position-quantity" name="quantity" type="number" min="0.0001" step="any" placeholder="100" required>
+      </div>
+      <div>
+        <label for="position-purchased-at">买入时间</label>
+        <input id="position-purchased-at" name="purchasedAt" type="datetime-local" required>
+      </div>
+      <div>
+        <label for="position-cost">每股买入成本</label>
+        <input id="position-cost" name="costBasis" type="number" min="0.0001" step="any" placeholder="0.00" required>
+      </div>
+      <div class="position-form-actions">
+        <button class="primary-action" id="save-position" type="submit">添加持仓</button>
+        <button class="secondary-action" id="cancel-position-edit" type="button" hidden>取消修改</button>
+      </div>
+    </form>
+    <div class="portfolio-table-wrap">
+      <table class="portfolio-table">
+        <thead>
+          <tr>
+            <th>标的</th>
+            <th>数量</th>
+            <th>成本</th>
+            <th>最新价</th>
+            <th>持仓盈亏</th>
+            <th>当日</th>
+            <th>风险状态</th>
+            <th><span class="sr-only">操作</span></th>
+          </tr>
+        </thead>
+        <tbody id="portfolio-rows"></tbody>
+      </table>
+    </div>
+    <div class="portfolio-empty" id="portfolio-empty" hidden>
+      <strong>还没有持仓</strong>
+      <p>在上方录入股票代码、数量、买入时间和成本。Livermore 会在交易时段按小时巡检。</p>
+    </div>
+    <p class="portfolio-footnote">行情数据来源于同花顺问财，可能存在延迟。风险线用于提醒复核，不会触发任何交易。</p>
   </dialog>
 
   <dialog id="capability-dialog" class="capability-dialog">

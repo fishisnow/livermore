@@ -9,7 +9,7 @@ import {
   type Span,
   type Tracer,
 } from "@opentelemetry/api";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BatchSpanProcessor, NodeTracerProvider, type SpanExporter } from "@opentelemetry/sdk-trace-node";
 import type { Agent, AgentEvent } from "@earendil-works/pi-agent-core";
@@ -29,23 +29,25 @@ const emptyUsage = (): RunUsage => ({
 export class Telemetry {
   private constructor(
     readonly enabled: boolean,
+    readonly captureContent: boolean,
     private readonly provider: NodeTracerProvider | undefined,
     readonly tracer: Tracer,
   ) {}
 
   static create(config: AppConfig, spanExporter?: SpanExporter): Telemetry {
-    if (!config.tracingEnabled) return new Telemetry(false, undefined, trace.getTracer("livermore"));
+    if (!config.tracingEnabled) return new Telemetry(false, false, undefined, trace.getTracer("livermore"));
     const exporter = spanExporter ?? new OTLPTraceExporter({ url: config.otlpTraceEndpoint, timeoutMillis: 5_000 });
     const provider = new NodeTracerProvider({
       resource: resourceFromAttributes({
         "service.name": "livermore-agent",
         "service.version": "0.1.0",
         "deployment.environment.name": process.env.NODE_ENV ?? "local",
+        "openinference.project.name": "livermore",
       }),
       spanProcessors: [new BatchSpanProcessor(exporter, { scheduledDelayMillis: 500, exportTimeoutMillis: 5_000 })],
     });
     provider.register();
-    return new Telemetry(true, provider, provider.getTracer("livermore-agent", "0.1.0"));
+    return new Telemetry(true, config.traceContentEnabled, provider, provider.getTracer("livermore-agent", "0.1.0"));
   }
 
   async withSpan<T>(name: string, attributes: Attributes, fn: (span: Span, activeContext: Context) => Promise<T>): Promise<T> {
@@ -91,7 +93,11 @@ export class Telemetry {
   }
 }
 
-export function observeAgent(agent: Agent, telemetry: Telemetry, parentContext: Context): { usage: RunUsage; unsubscribe: () => void } {
+export function observeAgent(
+  agent: Agent,
+  telemetry: Telemetry,
+  parentContext: Context,
+): { usage: RunUsage; unsubscribe: () => void } {
   const result = { usage: emptyUsage() };
   if (!telemetry.enabled) return { ...result, unsubscribe: () => {} };
   let turnSpan: Span | undefined;
@@ -106,28 +112,48 @@ export function observeAgent(agent: Agent, telemetry: Telemetry, parentContext: 
 
   function handleAgentEvent(event: AgentEvent): void {
     if (event.type === "turn_start") {
-      turnSpan = telemetry.tracer.startSpan("agent.turn", {}, parentContext);
+      turnSpan = telemetry.tracer.startSpan("agent.turn", {
+        attributes: {
+          "openinference.span.kind": "AGENT",
+          ...(telemetry.captureContent ? traceInput(serializeAgentContext(agent)) : {}),
+        },
+      }, parentContext);
       turnContext = trace.setSpan(parentContext, turnSpan);
     } else if (event.type === "message_start" && event.message.role === "assistant") {
       modelSpan = telemetry.tracer.startSpan("gen_ai.chat", {
-        attributes: { "gen_ai.operation.name": "chat" },
+        attributes: {
+          "openinference.span.kind": "LLM",
+          "gen_ai.operation.name": "chat",
+          "llm.provider": event.message.provider,
+          "llm.system": event.message.provider,
+          "llm.model_name": event.message.model,
+          ...(telemetry.captureContent ? traceInput(serializeAgentContext(agent)) : {}),
+        },
       }, turnContext);
     } else if (event.type === "message_end" && event.message.role === "assistant") {
       finishModelSpan(event.message);
     } else if (event.type === "tool_execution_start") {
       const span = telemetry.tracer.startSpan(`tool.${event.toolName}`, {
-        attributes: { "gen_ai.tool.name": event.toolName, "gen_ai.tool.call.id": event.toolCallId },
+        attributes: {
+          "openinference.span.kind": "TOOL",
+          "tool.name": event.toolName,
+          "gen_ai.tool.name": event.toolName,
+          "gen_ai.tool.call.id": event.toolCallId,
+          ...(telemetry.captureContent ? traceInput(safeJson(event.args)) : {}),
+        },
       }, turnContext);
       toolSpans.set(event.toolCallId, span);
     } else if (event.type === "tool_execution_end") {
       const span = toolSpans.get(event.toolCallId);
       if (span) {
+        if (telemetry.captureContent) span.setAttributes(traceOutput(safeJson(event.result)));
         span.setAttribute("error.type", event.isError ? "tool_execution_error" : "");
         span.setStatus({ code: event.isError ? SpanStatusCode.ERROR : SpanStatusCode.OK });
         span.end();
         toolSpans.delete(event.toolCallId);
       }
     } else if (event.type === "turn_end") {
+      if (turnSpan && telemetry.captureContent) turnSpan.setAttributes(traceOutput(serializeMessage(event.message)));
       turnSpan?.end();
       turnSpan = undefined;
       turnContext = parentContext;
@@ -159,6 +185,10 @@ export function observeAgent(agent: Agent, telemetry: Telemetry, parentContext: 
       "gen_ai.usage.cache_write_tokens": usage.cacheWrite,
       "gen_ai.usage.reasoning_tokens": usage.reasoning ?? 0,
       "gen_ai.usage.cost": usage.cost.total,
+      "llm.token_count.prompt": usage.input,
+      "llm.token_count.completion": usage.output,
+      "llm.token_count.total": usage.totalTokens,
+      ...(telemetry.captureContent ? traceOutput(serializeMessage(message)) : {}),
     });
     if (message.errorMessage) {
       modelSpan.setStatus({ code: SpanStatusCode.ERROR, message: message.errorMessage });
@@ -169,4 +199,57 @@ export function observeAgent(agent: Agent, telemetry: Telemetry, parentContext: 
     modelSpan.end();
     modelSpan = undefined;
   }
+}
+
+function traceInput(value: string): Attributes {
+  return { "input.value": truncate(value), "input.mime_type": "application/json" };
+}
+
+function traceOutput(value: string): Attributes {
+  return { "output.value": truncate(value), "output.mime_type": "application/json" };
+}
+
+function serializeAgentContext(agent: Agent): string {
+  return safeJson({
+    systemPrompt: agent.state.systemPrompt,
+    messages: agent.state.messages.map(messageForTrace),
+  });
+}
+
+function serializeMessage(message: unknown): string {
+  return safeJson(messageForTrace(message));
+}
+
+function messageForTrace(message: unknown): unknown {
+  if (!message || typeof message !== "object") return message;
+  const value = message as Record<string, unknown>;
+  const role = value.role;
+  const content = Array.isArray(value.content)
+    ? value.content.map((item) => {
+      if (!item || typeof item !== "object") return item;
+      const block = item as Record<string, unknown>;
+      if (block.type === "thinking") return { type: "thinking", redacted: true };
+      if (block.type === "image") return { type: "image", mimeType: block.mimeType };
+      return block;
+    })
+    : value.content;
+  return {
+    role,
+    ...(typeof value.toolName === "string" ? { toolName: value.toolName } : {}),
+    ...(typeof value.toolCallId === "string" ? { toolCallId: value.toolCallId } : {}),
+    content,
+  };
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return JSON.stringify({ unserializable: true });
+  }
+}
+
+function truncate(value: string): string {
+  const maximum = 100_000;
+  return value.length <= maximum ? value : `${value.slice(0, maximum)}…[truncated]`;
 }
