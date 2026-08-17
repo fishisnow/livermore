@@ -6,6 +6,7 @@ describe("loadConfig", () => {
     expect(loadConfig({})).toEqual({
       provider: "deepseek",
       model: "deepseek-v4-flash",
+      apiBaseUrl: undefined,
       timezone: "Asia/Shanghai",
       tavilyMcpEnabled: true,
       tavilyMcpUrl: "https://mcp.tavily.com/mcp/",
@@ -37,6 +38,7 @@ describe("loadConfig", () => {
     expect(loadConfig({ PI_PROVIDER: "openai", PI_MODEL: "gpt-5-mini" })).toEqual({
       provider: "openai",
       model: "gpt-5-mini",
+      apiBaseUrl: undefined,
       timezone: "Asia/Shanghai",
       tavilyMcpEnabled: true,
       tavilyMcpUrl: "https://mcp.tavily.com/mcp/",
@@ -61,6 +63,18 @@ describe("loadConfig", () => {
       feishuWebhookUrl: undefined,
       wechatWebhookUrl: undefined,
       notifyOnSuccess: true,
+    });
+  });
+
+  it("accepts an OpenAI-compatible custom base URL", () => {
+    expect(loadConfig({
+      PI_PROVIDER: "qwen",
+      PI_MODEL: "qwen3.7-flash",
+      PI_BASE_URL: "https://example.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    })).toMatchObject({
+      provider: "qwen",
+      model: "qwen3.7-flash",
+      apiBaseUrl: "https://example.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
     });
   });
 

@@ -245,7 +245,7 @@ flowchart TB
     Bootstrap --> PhoenixProcess
 ```
 
-Phoenix 安装在项目独立的 `.venv-phoenix/`，由 `launchd` 登录时启动并保持运行，不依赖 Docker daemon。默认工作日时间：市场简报 08:30、12:00、16:10；AI 产业链日报 08:45、17:00；持仓巡检 09:30、10:30、11:30、13:30、14:30、15:00。`launchd` 使用系统时区，任务日期使用 `APP_TIMEZONE`，两者应保持一致。
+Phoenix 安装在项目独立的 `.venv-phoenix/`，由 `launchd` 登录时启动并保持运行，不依赖 Docker daemon。默认工作日时间：市场简报 08:30、12:00、16:10；AI 产业链日报 08:45、17:00；持仓巡检 11:00、14:30。`launchd` 使用系统时区，任务日期使用 `APP_TIMEZONE`，两者应保持一致。
 
 `~/.local/bin/livermore` 指向仓库中的轻量启动器。默认命令检查 Agent Web、Phoenix 和 launchd 注册状态，等待本地服务健康后，通过 macOS 打开 `http://127.0.0.1:4310`。Phoenix `http://localhost:6006` 只作为二级 Trace 观测台。
 

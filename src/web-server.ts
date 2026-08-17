@@ -28,7 +28,7 @@ const sessions = new Map<string, ChatSession>();
 const taskSchedules = [
   { task: "market-briefing", title: "每日市场简报", schedule: "工作日 08:30 / 12:00 / 16:10" },
   { task: "ai-industry-chain", title: "AI 产业链日报", schedule: "工作日 08:45 / 17:00" },
-  { task: "portfolio-risk-check", title: "持仓风险巡检", schedule: "工作日 09:30—15:00 · 每小时" },
+  { task: "portfolio-risk-check", title: "持仓风险巡检", schedule: "工作日 11:00 / 14:30" },
 ] as const;
 
 const server = createServer(async (request, response) => {

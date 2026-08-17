@@ -24,14 +24,10 @@ const schedules: Schedule[] = [
     entrypoint: "portfolio-risk-cli.ts",
     args: [],
     times: [
-      { hour: 9, minute: 30 },
-      { hour: 10, minute: 30 },
-      { hour: 11, minute: 30 },
-      { hour: 13, minute: 30 },
+      { hour: 11, minute: 0 },
       { hour: 14, minute: 30 },
-      { hour: 15, minute: 0 },
     ],
-    description: "工作日 09:30 / 10:30 / 11:30 / 13:30 / 14:30 / 15:00",
+    description: "工作日 11:00 / 14:30",
   },
 ];
 

@@ -4,6 +4,8 @@ import { projectEnvPath } from "./project-paths.js";
 export interface AppConfig {
   provider: string;
   model: string;
+  /** OpenAI-compatible base URL for custom providers (e.g. Aliyun MaaS Qwen). */
+  apiBaseUrl: string | undefined;
   timezone: string;
   tavilyMcpEnabled: boolean;
   tavilyMcpUrl: string;
@@ -70,6 +72,7 @@ export function loadConfig(env?: NodeJS.ProcessEnv): AppConfig {
   return {
     provider: source.PI_PROVIDER?.trim() || "deepseek",
     model: source.PI_MODEL?.trim() || "deepseek-v4-flash",
+    apiBaseUrl: optional(source.PI_BASE_URL),
     timezone: source.APP_TIMEZONE?.trim() || "Asia/Shanghai",
     tavilyMcpEnabled,
     tavilyMcpUrl: source.TAVILY_MCP_URL?.trim() || "https://mcp.tavily.com/mcp/",
