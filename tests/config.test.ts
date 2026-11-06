@@ -11,8 +11,6 @@ describe("loadConfig", () => {
       tavilyMcpEnabled: true,
       tavilyMcpUrl: "https://mcp.tavily.com/mcp/",
       tavilyApiKey: undefined,
-      iwencaiBaseUrl: "https://openapi.iwencai.com",
-      iwencaiApiKey: undefined,
       futuPythonExecutable: "/usr/bin/python3",
       futuOpenDHost: "127.0.0.1",
       futuOpenDPort: 11111,
@@ -31,6 +29,8 @@ describe("loadConfig", () => {
       feishuWebhookUrl: undefined,
       wechatWebhookUrl: undefined,
       notifyOnSuccess: true,
+      macosNotificationsEnabled: process.platform === "darwin",
+      taskSchedulerEnabled: true,
     });
   });
 
@@ -43,8 +43,6 @@ describe("loadConfig", () => {
       tavilyMcpEnabled: true,
       tavilyMcpUrl: "https://mcp.tavily.com/mcp/",
       tavilyApiKey: undefined,
-      iwencaiBaseUrl: "https://openapi.iwencai.com",
-      iwencaiApiKey: undefined,
       futuPythonExecutable: "/usr/bin/python3",
       futuOpenDHost: "127.0.0.1",
       futuOpenDPort: 11111,
@@ -63,6 +61,8 @@ describe("loadConfig", () => {
       feishuWebhookUrl: undefined,
       wechatWebhookUrl: undefined,
       notifyOnSuccess: true,
+      macosNotificationsEnabled: process.platform === "darwin",
+      taskSchedulerEnabled: true,
     });
   });
 

@@ -3,30 +3,61 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light dark">
+  <script>
+    try {
+      const preference = localStorage.getItem("livermore.appearance") || "system";
+      document.documentElement.dataset.theme = preference === "system"
+        ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : preference;
+    } catch { /* Use the system default if storage is unavailable. */ }
+  </script>
   <title>Livermore · 本地投资 Agent</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
-<body>
+<body data-view="chat" data-inspector="auto">
+  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 11.5a8 8 0 0 1-8 8H5l-4 3V11.5a9.5 9.5 0 0 1 19 0Z"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 3v17h17M8 15l4-6 4 3 5-7"/></symbol>
+    <symbol id="i-tasks" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="m8 8 1 1 2-2m3 1h3m-9 6 1 1 2-2m3 1h3"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
+    <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></symbol>
+    <symbol id="i-inspector" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><path d="m9 3-1 3-3 1-2 3 2 2-1 3 2 3h3l2 3h3l1-3 3-1 2-3-2-2 1-3-2-3h-3l-2-3Z"/><circle cx="11.5" cy="12" r="3"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+    <symbol id="i-trace" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
+  </defs></svg>
   <div class="app-frame">
-    <header class="topbar">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true">L</span>
-        <div>
-          <strong>Livermore</strong>
-          <span>本地投资 Agent</span>
-        </div>
+    <aside class="sidebar" aria-label="主导航">
+      <div class="sidebar-brand"><span class="brand-mark" aria-hidden="true">L</span><div><strong>Livermore</strong><span>投资研究工作台</span></div></div>
+      <button class="sidebar-new" id="sidebar-new" type="button" title="新对话"><svg class="icon"><use href="#i-plus"/></svg><span>新对话</span><kbd>⌘N</kbd></button>
+      <p class="sidebar-label">工作区</p>
+      <nav class="sidebar-nav">
+        <button class="nav-item selected" data-view-target="chat" type="button" aria-current="page" title="研究对话"><svg class="icon"><use href="#i-chat"/></svg><span>研究对话</span></button>
+        <button class="nav-item" data-view-target="portfolio" type="button" title="我的持仓"><svg class="icon"><use href="#i-chart"/></svg><span>我的持仓</span><span class="nav-count" id="nav-position-count">—</span></button>
+        <button class="nav-item" data-view-target="tasks" type="button" title="任务与记录"><svg class="icon"><use href="#i-tasks"/></svg><span>任务与记录</span><span class="nav-count" id="nav-task-count">3</span></button>
+        <button class="nav-item" data-view-target="capabilities" type="button" title="研究能力"><svg class="icon"><use href="#i-grid"/></svg><span>研究能力</span></button>
+      </nav>
+      <section class="chat-history" aria-label="历史会话"><div class="section-label"><span>历史会话</span><button id="refresh-chats" type="button" aria-label="刷新历史会话">↻</button></div><div id="chat-history-list"></div><button id="more-chats" type="button" hidden>加载更早会话</button></section>
+      <div class="sidebar-note"><span class="live-dot"></span><span>本地工作区<span>数据保存在这台 Mac</span></span></div>
+      <div class="sidebar-bottom">
+        <label class="appearance-control" for="appearance"><svg class="icon"><use href="#i-sun"/></svg><span>外观</span><select id="appearance" aria-label="应用外观"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
+        <button class="nav-item native-only" id="native-settings" type="button" title="设置"><svg class="icon"><use href="#i-gear"/></svg><span>设置</span><kbd>⌘,</kbd></button>
+        <span class="sidebar-version">LIVERMORE · LOCAL AGENT</span>
       </div>
+    </aside>
+    <header class="topbar">
+      <div class="toolbar-leading"><button class="icon-button" id="toggle-sidebar" title="切换侧边栏" aria-label="切换侧边栏"><svg class="icon"><use href="#i-sidebar"/></svg></button><div class="toolbar-title"><strong id="view-title">研究对话</strong><span id="view-subtitle">与你的本地投资 Agent 一起研究</span></div></div>
       <div class="system-line">
         <button class="portfolio-open" id="portfolio-open" type="button">
           <span class="portfolio-open-dot" aria-hidden="true"></span>
           持仓
         </button>
-        <span class="divider"></span>
         <span class="live-dot" aria-hidden="true"></span>
         <span id="system-status">正在连接本地服务</span>
-        <span class="divider"></span>
-        <span id="clock"></span>
+        <button class="icon-button" id="toggle-inspector" title="显示或隐藏消息栏" aria-label="显示或隐藏消息栏" aria-expanded="true"><svg class="icon"><use href="#i-inspector"/></svg><span id="notification-indicator" class="notification-indicator" hidden></span></button>
+        <span id="clock" hidden></span>
       </div>
     </header>
 
@@ -34,20 +65,21 @@
       <section class="conversation" aria-label="Agent 对话">
         <div class="conversation-head">
           <div>
-            <p class="eyebrow">Research session</p>
-            <h1>让证据先说话。</h1>
+            <span class="conversation-status"><span class="live-dot"></span><span id="chat-session-title">研究会话</span></span>
           </div>
-          <button class="quiet-button" id="new-session" type="button">新对话</button>
+          <button class="quiet-button" id="new-session" type="button"><svg class="icon"><use href="#i-plus"/></svg>新对话</button>
         </div>
 
         <div class="messages" id="messages" aria-live="polite">
           <div class="welcome" id="welcome">
-            <p class="welcome-lead">你可以问今天发生了什么，也可以追问某次任务为什么得出这个结论。</p>
+            <div class="welcome-mark" aria-hidden="true"><svg class="icon"><use href="#i-chart"/></svg></div>
+            <p class="eyebrow">你的本地研究助理</p><h1>今天，从哪里开始？</h1>
+            <p class="welcome-lead">复盘市场、检查持仓，或追问一份报告的依据。</p>
             <div class="prompt-grid">
-              <button type="button" data-prompt="总结最近一次市场简报的关键结论、来源质量和待验证风险。">复盘最近市场简报</button>
-              <button type="button" data-prompt="查看最近一次 AI 产业链日报，找出可能传导到 A/H 股的投资线索，并区分事实与推断。">寻找 AI 产业链线索</button>
-              <button type="button" data-prompt="检查最近运行的三个任务：哪些成功、哪些有警告，耗时、来源或持仓数量如何？">检查任务运行质量</button>
-              <button type="button" data-prompt="列出当前可用的 skills，并说明哪些适合辅助投资研究。">查看可用 Skills</button>
+              <button type="button" data-prompt="总结最近一次市场简报的关键结论、来源质量和待验证风险。"><svg class="icon"><use href="#i-chart"/></svg><span><strong>市场复盘</strong><small>读懂最新简报里的关键信号</small></span><span class="prompt-arrow">↗</span></button>
+              <button type="button" data-prompt="查看最近一次 AI 产业链日报，找出可能传导到 A/H 股的投资线索，并区分事实与推断。"><svg class="icon"><use href="#i-trace"/></svg><span><strong>产业链线索</strong><small>跟踪 AI 产业与市场的连接</small></span><span class="prompt-arrow">↗</span></button>
+              <button type="button" data-prompt="查看我的持仓和最近一次巡检，总结优先处理的风险与操作建议，并说明数据时间。"><svg class="icon"><use href="#i-tasks"/></svg><span><strong>持仓风险</strong><small>看看哪些标的需要优先关注</small></span><span class="prompt-arrow">↗</span></button>
+              <button type="button" data-prompt="检查最近运行的三个任务：哪些成功、哪些有警告，耗时、来源或持仓数量如何？"><svg class="icon"><use href="#i-grid"/></svg><span><strong>任务回顾</strong><small>检查自动研究的效果与表现</small></span><span class="prompt-arrow">↗</span></button>
             </div>
           </div>
         </div>
@@ -58,25 +90,29 @@
         </div>
 
         <form class="composer" id="composer">
-          <label for="prompt">向 Livermore 提问</label>
+          <label class="sr-only" for="prompt">向 Livermore 提问</label>
           <div class="composer-row">
-            <textarea id="prompt" rows="1" maxlength="20000" placeholder="例如：结合今天的市场简报，哪些信号值得明天继续观察？"></textarea>
-            <button id="send" type="submit">
-              <span>发送</span>
-              <span aria-hidden="true">↗</span>
-            </button>
+            <textarea id="prompt" rows="2" maxlength="20000" placeholder="询问市场、持仓，或一份研究报告…"></textarea>
+            <button id="send" type="submit" aria-label="发送消息" title="发送消息"><svg class="icon"><use href="#i-arrow"/></svg></button>
           </div>
-          <p>回答基于本地任务、已配置 MCP 和 Skills；不构成投资建议。</p>
+          <p><span>研究参考，不构成投资建议</span><span>↵ 发送 · ⇧↵ 换行</span></p>
         </form>
       </section>
 
-      <aside class="task-rail" aria-label="任务运行状态">
+      <aside class="task-rail notification-rail" aria-label="最近推送消息">
+        <div class="rail-head"><div><p class="eyebrow">消息中心</p><h2>最近推送 <span id="notification-count" class="unread-count">0</span></h2></div><button class="icon-button" id="refresh" type="button" aria-label="刷新消息">↻</button></div>
+        <div class="notification-permission native-only"><span id="notification-permission-status">正在检查 Mac 通知…</span><button id="notification-permission" type="button">开启通知</button></div>
+        <div id="notification-list" class="notification-list" aria-live="polite"></div>
+        <p class="inbox-footnote">最近 30 条 · 完整分析保存在任务记录中</p>
+      </aside>
+
+      <section class="tasks-page" aria-label="任务与记录">
         <div class="rail-head">
           <div>
-            <p class="eyebrow">Task tape</p>
-            <h2>自动研究任务</h2>
+            <p class="eyebrow">自动化</p>
+            <h2>研究任务</h2>
           </div>
-          <button class="icon-button" id="refresh" type="button" aria-label="刷新任务">↻</button>
+          <div class="dialog-head-actions"><button class="primary-button" id="new-research-task" type="button">＋ 新增研究任务</button><button class="icon-button" id="refresh-tasks" type="button" aria-label="刷新任务">↻</button></div>
         </div>
 
         <div id="tasks" class="tasks"></div>
@@ -115,7 +151,7 @@
             打开 Trace 观测台 <span aria-hidden="true">↗</span>
           </a>
         </section>
-      </aside>
+      </section>
     </main>
   </div>
 
@@ -132,11 +168,42 @@
     <article id="dialog-report" class="report"></article>
   </dialog>
 
+  <dialog id="notification-dialog">
+    <div class="dialog-head"><div><p class="eyebrow">消息中心</p><h2 id="notification-title">推送消息</h2></div><button class="icon-button" id="close-notification" type="button" aria-label="关闭消息">×</button></div>
+    <div id="notification-meta" class="dialog-meta"></div>
+    <article id="notification-body" class="report"></article>
+    <button id="notification-run" class="secondary-action" type="button" hidden>查看完整报告与 Trace ↗</button>
+  </dialog>
+
+  <dialog id="task-config-dialog" class="task-config-dialog">
+    <form id="task-config-form">
+      <div class="dialog-head"><div><p class="eyebrow">研究任务配置</p><h2 id="task-config-title">Prompt 与定时</h2></div><button class="icon-button" id="close-task-config" type="button" aria-label="关闭任务配置">×</button></div>
+      <div class="task-editor-grid">
+        <section class="task-schedule-editor">
+          <div id="task-name-field" hidden><label class="editor-label" for="task-name">任务名称</label><input id="task-name" type="text" maxlength="80" placeholder="例如：半导体产业每周跟踪"></div>
+          <label class="schedule-enabled"><input id="task-enabled" type="checkbox">启用定时运行</label>
+          <p class="editor-note">关闭后仍可手动运行。保存后新计划自动生效，不会改变正在运行的任务。</p>
+          <label class="editor-label" for="task-timezone">时区</label><input id="task-timezone" type="text" maxlength="80" required placeholder="Asia/Shanghai">
+          <fieldset class="weekday-picker"><legend>运行日</legend><div id="task-weekdays"></div></fieldset>
+          <div class="section-label"><span>运行时间与模式</span><button id="add-task-time" type="button">＋ 添加时间</button></div>
+          <div id="task-times"></div>
+          <p class="editor-note">电脑需处于开机状态。关闭应用后继续运行，请在 Agent 菜单启用后台定时任务。默认工作日不自动排除交易所节假日。</p>
+        </section>
+        <section class="task-prompt-editor">
+          <div class="section-label"><label for="task-prompt">任务 Prompt</label><button id="reset-task-prompt" type="button">恢复默认 Prompt</button></div>
+          <p id="task-prompt-help" class="editor-note"></p>
+          <textarea id="task-prompt" required minlength="20" maxlength="30000" spellcheck="false" aria-label="任务 Prompt"></textarea>
+        </section>
+      </div>
+      <div class="task-config-footer"><p id="task-config-error" role="alert"></p><div class="dialog-head-actions"><button id="delete-custom-task" class="danger-action" type="button" hidden>删除任务</button><button id="save-task-config" class="primary-button" type="submit">保存配置</button></div></div>
+    </form>
+  </dialog>
+
   <dialog id="portfolio-dialog" class="portfolio-dialog">
     <div class="dialog-head portfolio-dialog-head">
       <div>
         <p class="eyebrow">Risk watch</p>
-        <h2>持仓与风险哨兵</h2>
+        <h2>我的持仓</h2>
       </div>
       <div class="dialog-head-actions">
         <button class="secondary-action" id="run-portfolio-check" type="button">立即巡检</button>
@@ -191,9 +258,9 @@
     </div>
     <div class="portfolio-empty" id="portfolio-empty" hidden>
       <strong>还没有持仓</strong>
-      <p>在上方录入股票代码、数量、买入时间和成本。Livermore 会在交易时段按小时巡检。</p>
+      <p>录入股票代码、数量、买入时间和成本，开始跟踪持仓风险。</p>
     </div>
-    <p class="portfolio-footnote">行情数据来源于同花顺问财，可能存在延迟。风险线用于提醒复核，不会触发任何交易。</p>
+    <p class="portfolio-footnote">A 股主力资金来自东方财富数据中心，行情可能存在延迟。风险线用于提醒复核，不会触发任何交易。</p>
   </dialog>
 
   <dialog id="capability-dialog" class="capability-dialog">

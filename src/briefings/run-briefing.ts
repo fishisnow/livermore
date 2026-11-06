@@ -13,13 +13,16 @@ import { collectDirectSources } from "./direct-source-provider.js";
 import { evaluateBriefing, type EvaluationResult } from "./evaluation.js";
 import { collectLiveSources, loadReplaySources } from "./source-provider.js";
 import { taskDefinitions } from "./task-definitions.js";
-import type { BriefingTask, SourceItem } from "./types.js";
+import type { BriefingMode, BriefingTask, SourceItem } from "./types.js";
+import { getTaskSettings, renderBriefingPrompt } from "../tasks/task-settings.js";
 
 export interface RunBriefingOptions {
   task: BriefingTask;
   now?: Date;
   replayPath?: string;
   force?: boolean;
+  mode?: BriefingMode;
+  scheduledSlot?: string;
   config: AppConfig;
   createAgent?: (config: AppConfig) => Promise<Agent>;
   database?: InvestmentDatabase;
@@ -46,12 +49,14 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
   const now = options.now ?? new Date();
   if (Number.isNaN(now.getTime())) throw new Error("Invalid briefing time.");
   const definition = taskDefinitions[options.task];
-  const mode = definition.resolveMode(now, options.config.timezone);
-  const localDate = formatLocal(now, options.config.timezone, "date");
-  const localTime = formatLocal(now, options.config.timezone, "time");
   const database = options.database ?? new InvestmentDatabase(databasePath);
   const ownsDatabase = !options.database;
-  const idempotencyKey = `${options.task}:${localDate}:${mode}`;
+  const settings = getTaskSettings(database, options.task, options.config.timezone);
+  options = { ...options, config: { ...options.config, timezone: settings.timezone } };
+  const mode = options.mode ?? definition.resolveMode(now, settings.timezone);
+  const localDate = formatLocal(now, settings.timezone, "date");
+  const localTime = formatLocal(now, settings.timezone, "time");
+  const idempotencyKey = options.scheduledSlot ?? `${options.task}:${localDate}:${mode}`;
   let runId: string;
   try {
     runId = database.startRun({
@@ -79,6 +84,7 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
       "livermore.run.id": runId,
       "livermore.task": options.task,
       "livermore.mode": mode,
+      "livermore.task.config_revision": settings.revision,
       "livermore.replay": Boolean(options.replayPath),
     }, async (rootSpan, rootContext) => {
       const spanContext = rootSpan.spanContext();
@@ -117,7 +123,7 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
           "openinference.span.kind": "AGENT",
           "livermore.task": options.task,
           "livermore.source.count": sources.length,
-        }, async (_span, agentContext) => generateReport(options, definition.buildPrompt({
+        }, async (_span, agentContext) => generateReport(options, renderBriefingPrompt(settings, {
           mode,
           nowIso: now.toISOString(),
           localNow: `${localDate} ${localTime.slice(0, 2)}:${localTime.slice(2)}`,

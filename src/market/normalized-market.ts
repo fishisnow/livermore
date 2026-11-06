@@ -1,4 +1,4 @@
-export type MarketDataSource = "futuapi" | "iwencai";
+export type MarketDataSource = "futuapi" | "eastmoney";
 
 export interface NormalizedMarketEvidence {
   source: MarketDataSource;

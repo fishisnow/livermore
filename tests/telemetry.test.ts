@@ -53,7 +53,7 @@ describe("local OTLP tracing", () => {
       timestamp: 2,
     };
     const agent = {
-      state: { systemPrompt: "只做研究", messages: [userMessage] },
+      state: { systemPrompt: "只做研究", tools: [], messages: [userMessage] },
       subscribe(callback: (event: AgentEvent) => void) {
         listener = callback;
         return () => { listener = undefined; };
@@ -73,13 +73,13 @@ describe("local OTLP tracing", () => {
     listener?.({
       type: "tool_execution_start",
       toolCallId: "call-1",
-      toolName: "query_iwencai_market",
+      toolName: "query_a_share_main_fund_flow",
       args: { query: "600519 最新价" },
     });
     listener?.({
       type: "tool_execution_end",
       toolCallId: "call-1",
-      toolName: "query_iwencai_market",
+      toolName: "query_a_share_main_fund_flow",
       result: { content: [{ type: "text", text: "{\"最新价\":1400}" }] },
       isError: false,
     });
@@ -107,9 +107,9 @@ describe("local OTLP tracing", () => {
       cost: 0.002,
       costCurrency: "USD",
     });
-    expect(spans.find((span) => span.name === "tool.query_iwencai_market")?.attributes).toMatchObject({
+    expect(spans.find((span) => span.name === "tool.query_a_share_main_fund_flow")?.attributes).toMatchObject({
       "openinference.span.kind": "TOOL",
-      "tool.name": "query_iwencai_market",
+      "tool.name": "query_a_share_main_fund_flow",
       "input.mime_type": "application/json",
       "output.mime_type": "application/json",
     });
@@ -142,7 +142,7 @@ describe("local OTLP tracing", () => {
       timestamp: 2,
     };
     const agent = {
-      state: { systemPrompt: "测试", messages: [] },
+      state: { systemPrompt: "测试", tools: [], messages: [] },
       subscribe(callback: (event: AgentEvent) => void) {
         listener = callback;
         return () => { listener = undefined; };

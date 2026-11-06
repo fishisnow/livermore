@@ -12,12 +12,7 @@ import {
   queryFutuMarket,
   queryFutuNews,
 } from "../market/futu-client.js";
-import {
-  isIwencaiQuotaExceeded,
-  iwencaiQuotaExceededResult,
-  queryIwencai,
-  iwencaiScriptPath,
-} from "../market/iwencai-client.js";
+import { queryEastmoneyMainFundFlow } from "../market/eastmoney-fund-flow.js";
 import { isMainlandSecurity, normalizeSecurityCode } from "../market/normalized-market.js";
 import { projectRoot, projectSkillsDirectory, reportsDirectory } from "../project-paths.js";
 import type { InvestmentDatabase } from "../storage/database.js";
@@ -33,7 +28,7 @@ export interface SkillDescriptor {
 
 export interface RuntimeToolHooks {
   onSkillRead?: (name: string, content: string) => void;
-  onIwencaiResult?: (query: string, result: unknown) => void;
+  onFundFlowResult?: (symbols: string[], result: unknown) => void;
   onFutuResult?: (symbols: string[], result: unknown) => void;
   onFutuNewsResult?: (keywords: string[], result: unknown) => void;
 }
@@ -45,6 +40,7 @@ const listRunsParameters = Type.Object({
     Type.Literal("market-briefing"),
     Type.Literal("ai-industry-chain"),
     Type.Literal("portfolio-risk-check"),
+    Type.String({ pattern: "^custom-[a-f0-9-]{36}$" }),
   ])),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
 });
@@ -152,39 +148,10 @@ export function createRuntimeTools(
         })), null, 2));
       },
     },
-    ...(existsSync(iwencaiScriptPath) ? [{
-      name: "query_iwencai_market",
-      label: "Query Iwencai market data",
-      description: "Query current stock, ETF, index, price, turnover, fund-flow, or technical-indicator data through the installed hithink-market-query skill. Use this instead of web search for structured market quotes.",
-      parameters: Type.Object({
-        query: Type.String({ minLength: 2, maxLength: 300 }),
-        page: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
-        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
-        retry: Type.Optional(Type.Boolean()),
-      }),
-      async execute(_id, rawParams) {
-        const params = rawParams as { query: string; page?: number; limit?: number; retry?: boolean };
-        if (!config.iwencaiApiKey) {
-          return textResult("IWENCAI_API_KEY is not configured in Livermore's local .env.", true);
-        }
-        try {
-          const result = await queryIwencai(config, params);
-          hooks.onIwencaiResult?.(params.query, result);
-          return textResult(JSON.stringify(result, null, 2));
-        } catch (error) {
-          if (isIwencaiQuotaExceeded(error)) {
-            const result = iwencaiQuotaExceededResult(params.query, error);
-            hooks.onIwencaiResult?.(params.query, result);
-            return textResult(JSON.stringify(result, null, 2));
-          }
-          return textResult(errorMessage(error), true);
-        }
-      },
-    } satisfies AgentTool<any>] : []),
-    ...(existsSync(iwencaiScriptPath) ? [{
+    {
       name: "query_a_share_main_fund_flow",
       label: "Query A-share main fund flow",
-      description: "Query only the main net capital inflow of mainland A-share/ETF symbols through the installed hithink-market-query skill. Do not use this tool for latest price, daily change, RSI, MACD, Hong Kong securities, or other market fields.",
+      description: "Query mainland A-share/ETF main-force net inflow and super-large/large/medium/small order details from East Money data center (data.eastmoney.com 资金流向). Do not use this tool for latest price, daily change, RSI, MACD, Hong Kong securities, or other market fields.",
       parameters: securityListParameters,
       async execute(_id, rawParams) {
         const params = rawParams as { symbols: string[] };
@@ -193,28 +160,15 @@ export function createRuntimeTools(
         if (invalid.length > 0) {
           return textResult(`Only mainland SH/SZ/BJ symbols are allowed: ${invalid.join(", ")}`, true);
         }
-        if (!config.iwencaiApiKey) {
-          return textResult("IWENCAI_API_KEY is not configured in Livermore's local .env.", true);
-        }
-        const iwencaiCodes = symbols.map((symbol) => symbol.split(".")[0]!);
-        const query = `${iwencaiCodes.join("、")} 今日主力资金净流入，只返回证券代码、证券简称、主力净流入`;
         try {
-          const result = await queryIwencai(config, {
-            query,
-            limit: Math.min(50, Math.max(10, symbols.length)),
-          });
-          hooks.onIwencaiResult?.(query, result);
-          return textResult(JSON.stringify(result, null, 2));
+          const result = await queryEastmoneyMainFundFlow(symbols);
+          hooks.onFundFlowResult?.(symbols, result);
+          return textResult(JSON.stringify(result, null, 2), !result.success);
         } catch (error) {
-          if (isIwencaiQuotaExceeded(error)) {
-            const result = iwencaiQuotaExceededResult(query, error);
-            hooks.onIwencaiResult?.(query, result);
-            return textResult(JSON.stringify(result, null, 2));
-          }
           return textResult(errorMessage(error), true);
         }
       },
-    } satisfies AgentTool<any>] : []),
+    } satisfies AgentTool<any>,
     ...(existsSync(futuSnapshotScriptPath)
       && existsSync(futuKlineScriptPath)
       && existsSync(futuIndicatorScriptPath) ? [{

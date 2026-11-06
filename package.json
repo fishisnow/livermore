@@ -8,7 +8,7 @@
     "livermore": "bin/livermore.mjs"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "dev": "node --import tsx src/cli.ts",
@@ -22,12 +22,19 @@
     "web": "node --import tsx src/web-server.ts",
     "feishu": "node --import tsx src/feishu-bot-cli.ts",
     "install:local": "node bin/install.mjs",
+    "desktop:build": "node desktop/build-macos.mjs",
+    "desktop:open": "open release/macos.noindex/Livermore.app",
+    "desktop:verify": "node desktop/verify.mjs",
+    "desktop:verify-gui": "node desktop/verify-gui.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.80.8",
-    "@earendil-works/pi-ai": "0.80.8",
+    "@earendil-works/pi-agent-core": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-schema": "1.5.0",
+    "@rahularya01/pi-cursor": "1.4.39",
     "@larksuiteoapi/node-sdk": "^1.71.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentelemetry/api": "^1.9.1",

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { Agent } from "@earendil-works/pi-agent-core";
 import {
   createProvider,
@@ -11,6 +12,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { AppConfig } from "../config.js";
 import { systemPromptPath } from "../project-paths.js";
 import { createReportTool } from "../tools/report-tool.js";
+import { cursorProvider } from "./cursor-provider.js";
 
 export interface InvestmentAgentOptions {
   tools?: AgentTool<any>[];
@@ -19,7 +21,7 @@ export interface InvestmentAgentOptions {
 }
 
 export async function createInvestmentAgent(config: AppConfig, options: InvestmentAgentOptions = {}): Promise<Agent> {
-  const models = resolveModels(config);
+  const models = await resolveModels(config);
   const model = models.getModel(config.provider, config.model);
   if (!model) {
     const examples = models.getModels(config.provider).slice(0, 8).map((item) => item.id);
@@ -47,6 +49,7 @@ export async function createInvestmentAgent(config: AppConfig, options: Investme
       tools,
     },
     streamFn: models.streamSimple.bind(models),
+    sessionId: randomUUID(),
     toolExecution: "parallel",
     beforeToolCall: async ({ toolCall }) => {
       if (!allowed.has(toolCall.name)) {
@@ -57,8 +60,12 @@ export async function createInvestmentAgent(config: AppConfig, options: Investme
   });
 }
 
-function resolveModels(config: AppConfig) {
+async function resolveModels(config: AppConfig) {
   const models = builtinModels();
+  if (config.provider === "cursor") {
+    models.setProvider(await cursorProvider(config.model));
+    return models;
+  }
   if (!config.apiBaseUrl) return models;
 
   const baseUrl = normalizeOpenAiBaseUrl(config.apiBaseUrl);

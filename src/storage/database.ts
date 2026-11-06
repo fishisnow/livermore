@@ -5,7 +5,29 @@ import { DatabaseSync } from "node:sqlite";
 import type { BriefingTask, SourceItem } from "../briefings/types.js";
 
 export type RunStatus = "running" | "succeeded" | "failed" | "skipped";
-export type TaskName = BriefingTask | "portfolio-risk-check";
+export type BuiltinTaskName = BriefingTask | "portfolio-risk-check";
+export type CustomTaskName = `custom-${string}`;
+export type TaskName = BuiltinTaskName | CustomTaskName;
+export interface CustomTask { id: CustomTaskName; title: string; createdAt: string; deletedAt: string | null }
+export interface ChatRecord { id: string; title: string; createdAt: string; updatedAt: string; status: string; error: string | null }
+
+export interface NotificationDelivery {
+  channel: string;
+  status: string;
+  errorMessage: string | null;
+  attemptedAt: string;
+}
+
+export interface AlertRecord {
+  id: string;
+  runId: string | null;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  body: string;
+  createdAt: string;
+  readAt: string | null;
+  deliveries: NotificationDelivery[];
+}
 
 export interface StartRunInput {
   task: TaskName;
@@ -245,6 +267,112 @@ export class InvestmentDatabase {
     if (status === "sent") this.db.prepare("UPDATE alerts SET status = 'sent' WHERE id = ?").run(alertId);
   }
 
+  listAlerts(limit = 30): AlertRecord[] {
+    return this.db.prepare("SELECT * FROM alerts ORDER BY created_at DESC, rowid DESC LIMIT ?").all(Math.max(1, Math.min(100, limit))).map((row) => this.mapAlert(row));
+  }
+
+  getAlert(id: string): AlertRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM alerts WHERE id = ?").get(id);
+    return row ? this.mapAlert(row) : undefined;
+  }
+
+  acknowledgeAlert(id: string): boolean {
+    return Number(this.db.prepare("UPDATE alerts SET acknowledged_at = COALESCE(acknowledged_at, ?) WHERE id = ?").run(new Date().toISOString(), id).changes) > 0;
+  }
+
+  unreadAlertCount(): number {
+    return Number(this.db.prepare("SELECT count(*) AS count FROM alerts WHERE acknowledged_at IS NULL").get()!.count);
+  }
+
+  private mapAlert(row: unknown): AlertRecord {
+    const value = row as Record<string, string | null>;
+    return {
+      id: value.id!, runId: value.run_id ?? null, severity: value.severity as AlertRecord["severity"],
+      title: value.title!, body: value.body!, createdAt: value.created_at!, readAt: value.acknowledged_at ?? null,
+      deliveries: this.db.prepare("SELECT * FROM notification_deliveries WHERE alert_id = ? ORDER BY attempted_at").all(value.id!).map((item) => ({
+        channel: String(item.channel), status: String(item.status), errorMessage: item.error_message === null ? null : String(item.error_message), attemptedAt: String(item.attempted_at),
+      })),
+    };
+  }
+
+  getTaskConfiguration(task: TaskName): { value: unknown; revision: number; updatedAt: string } | undefined {
+    const row = this.db.prepare("SELECT * FROM task_configurations WHERE task = ?").get(task);
+    return row ? { value: JSON.parse(String(row.config_json)), revision: Number(row.revision), updatedAt: String(row.updated_at) } : undefined;
+  }
+
+  saveTaskConfiguration(task: TaskName, value: unknown, expectedRevision: number): boolean {
+    const result = this.db.prepare(`
+      INSERT INTO task_configurations (task, config_json, revision, updated_at) SELECT ?, ?, 1, ? WHERE ? = 0
+      ON CONFLICT(task) DO UPDATE SET config_json = excluded.config_json, revision = task_configurations.revision + 1, updated_at = excluded.updated_at
+      WHERE task_configurations.revision = ?
+    `);
+    const now = new Date().toISOString();
+    // UPDATE separately: an INSERT ... WHERE false cannot reach ON CONFLICT.
+    if (expectedRevision > 0) return Number(this.db.prepare("UPDATE task_configurations SET config_json = ?, revision = revision + 1, updated_at = ? WHERE task = ? AND revision = ?").run(JSON.stringify(value), now, task, expectedRevision).changes) === 1;
+    return Number(result.run(task, JSON.stringify(value), now, expectedRevision, expectedRevision).changes) === 1;
+  }
+
+  claimScheduledTask(task: TaskName, slot: string): boolean {
+    return Number(this.db.prepare("INSERT OR IGNORE INTO task_schedule_dispatches (task, slot, dispatched_at) VALUES (?, ?, ?)").run(task, slot, new Date().toISOString()).changes) === 1;
+  }
+
+  releaseScheduledTask(task: TaskName, slot: string): void {
+    this.db.prepare("DELETE FROM task_schedule_dispatches WHERE task = ? AND slot = ?").run(task, slot);
+  }
+
+  listCustomTasks(): CustomTask[] {
+    return this.db.prepare("SELECT * FROM custom_tasks WHERE deleted_at IS NULL ORDER BY created_at, id").all().map((row) => ({ id: String(row.id) as CustomTaskName, title: String(row.title), createdAt: String(row.created_at), deletedAt: null }));
+  }
+
+  getCustomTask(id: string): CustomTask | undefined { return this.listCustomTasks().find((item) => item.id === id); }
+
+  createCustomTask(id: CustomTaskName, title: string, settings: unknown): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("INSERT INTO custom_tasks (id, title, created_at) VALUES (?, ?, ?)").run(id, title, new Date().toISOString());
+      if (!this.saveTaskConfiguration(id, settings, 0)) throw new Error("Task already exists.");
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  updateCustomTask(id: CustomTaskName, title: string, settings: unknown, revision: number): boolean {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (!this.getCustomTask(id) || !this.saveTaskConfiguration(id, settings, revision)) { this.db.exec("ROLLBACK"); return false; }
+      this.db.prepare("UPDATE custom_tasks SET title = ? WHERE id = ?").run(title, id);
+      this.db.exec("COMMIT"); return true;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  deleteCustomTask(id: CustomTaskName): boolean {
+    return Number(this.db.prepare("UPDATE custom_tasks SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL").run(new Date().toISOString(), id).changes) > 0;
+  }
+
+  createChat(id = randomUUID()): ChatRecord {
+    const now = new Date().toISOString();
+    this.db.prepare("INSERT INTO chat_sessions (id, title, created_at, updated_at) VALUES (?, '新对话', ?, ?)").run(id, now, now);
+    return this.getChat(id)!;
+  }
+
+  listChats(limit = 100, offset = 0): ChatRecord[] {
+    return this.db.prepare("SELECT id, title, created_at, updated_at, status, error FROM chat_sessions ORDER BY updated_at DESC, rowid DESC LIMIT ? OFFSET ?").all(Math.max(1, Math.min(100, limit)), Math.max(0, offset)).map(mapChat);
+  }
+
+  getChat(id: string): (ChatRecord & { messages: unknown[] }) | undefined {
+    const row = this.db.prepare("SELECT * FROM chat_sessions WHERE id = ?").get(id);
+    return row ? { ...mapChat(row), messages: JSON.parse(String(row.transcript_json)) as unknown[] } : undefined;
+  }
+
+  saveChat(id: string, messages: readonly unknown[], status: string, error: string | null = null): void {
+    const first = messages.find((item) => !!item && typeof item === "object" && (item as { role?: unknown }).role === "user") as { content?: unknown } | undefined;
+    const title = typeof first?.content === "string" ? first.content : Array.isArray(first?.content) ? first.content.filter((item) => item.type === "text").map((item) => item.text).join("") : "";
+    this.db.prepare("UPDATE chat_sessions SET transcript_json = ?, title = CASE WHEN ? != '' THEN ? ELSE title END, status = ?, error = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(messages), title, title.replace(/\s+/g, " ").slice(0, 60), status, error, new Date().toISOString(), id);
+  }
+
+  deleteChat(id: string): boolean { return Number(this.db.prepare("DELETE FROM chat_sessions WHERE id = ?").run(id).changes) > 0; }
+
+  recoverInterruptedChats(): void { this.db.prepare("UPDATE chat_sessions SET status = 'interrupted', error = '上次回答因服务退出而中断，可继续提问。' WHERE status = 'running'").run(); }
+
   upsertFeishuConversation(input: {
     chatId: string;
     chatType: "p2p" | "group";
@@ -432,6 +560,17 @@ export class InvestmentDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(task, started_at DESC);
       CREATE INDEX IF NOT EXISTS idx_task_runs_key_status ON task_runs(idempotency_key, status);
+      CREATE TABLE IF NOT EXISTS task_configurations (
+        task TEXT PRIMARY KEY, config_json TEXT NOT NULL, revision INTEGER NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS custom_tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, deleted_at TEXT);
+      CREATE TABLE IF NOT EXISTS chat_sessions (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        transcript_json TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'idle', error TEXT
+      );
+      CREATE TABLE IF NOT EXISTS task_schedule_dispatches (
+        task TEXT NOT NULL, slot TEXT NOT NULL, dispatched_at TEXT NOT NULL, PRIMARY KEY(task, slot)
+      );
       CREATE TABLE IF NOT EXISTS task_locks (task TEXT PRIMARY KEY, owner TEXT NOT NULL, expires_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS sources (
         id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL, published_at TEXT,
@@ -496,6 +635,11 @@ export class InvestmentDatabase {
       this.db.exec("ALTER TABLE task_runs ADD COLUMN cost_currency TEXT NOT NULL DEFAULT 'USD'");
     }
   }
+}
+
+function mapChat(row: unknown): ChatRecord {
+  const item = row as Record<string, unknown>;
+  return { id: String(item.id), title: String(item.title), createdAt: String(item.created_at), updatedAt: String(item.updated_at), status: String(item.status), error: item.error == null ? null : String(item.error) };
 }
 
 function mapPortfolioPosition(row: unknown): PortfolioPosition {

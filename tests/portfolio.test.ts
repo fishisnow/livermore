@@ -67,7 +67,7 @@ describe("portfolio ledger", () => {
       mainNetInflow: -100_000,
       severity: "critical",
       signals: ["持仓亏损达到风险线"],
-      rawData: { source: "iwencai" },
+      rawData: { source: "eastmoney" },
     });
 
     expect(database.getPosition(position.id)).toMatchObject({
@@ -189,7 +189,7 @@ describe("portfolio risk policy", () => {
     expect(evaluateRisk({ currentPrice: 10, pnlPct: 1, dayChangePct: 1, rsi: 80 }).severity).toBe("warning");
   });
 
-  it("uses Futu quotes and only Iwencai fund flow while code retains final risk policy", async () => {
+  it("uses Futu quotes and only East Money fund flow while code retains final risk policy", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "livermore-portfolio-"));
     const database = new InvestmentDatabase(":memory:");
     database.createPosition({
@@ -198,7 +198,7 @@ describe("portfolio risk policy", () => {
       purchasedAt: "2026-07-01T01:30:00.000Z",
       costBasis: 12,
     });
-    const config = loadConfig({ TRACING_ENABLED: "false" });
+    const config = loadConfig({ TRACING_ENABLED: "false", MACOS_NOTIFICATIONS_ENABLED: "false" });
     const telemetry = Telemetry.create(config);
     try {
       const result = await runPortfolioRiskCheck({
@@ -208,7 +208,7 @@ describe("portfolio risk policy", () => {
         reportDirectory: directory,
         now: new Date("2026-07-24T02:30:00.000Z"),
         runAgent: async () => ({
-          analysis: "平安银行价格走弱，需人工复核资金面。行情与技术指标来自 Futu，主力资金来自同花顺问财。",
+          analysis: "平安银行价格走弱，需人工复核资金面。行情与技术指标来自 Futu，主力资金来自东方财富。",
           futuResults: [{
             source: "futuapi",
             rows: [{
@@ -223,13 +223,17 @@ describe("portfolio risk policy", () => {
               raw: { klineCount: 80 },
             }],
           }],
-          iwencaiFundResults: [{
-            datas: [{
-              股票代码: "000001.SZ",
-              股票简称: "平安银行",
-              "收盘价:不复权[20260724]": "99.99",
-              "涨跌幅:前复权[20260724]": "9.99%",
-              "主力资金流向[20260724]": "-100000",
+          fundFlowResults: [{
+            source: "eastmoney",
+            query: "000001.SZ",
+            endpoint: "https://push2.eastmoney.com/api/qt/ulist.np/get",
+            success: true,
+            rows: [{
+              symbol: "000001.SZ",
+              code: "000001",
+              name: "平安银行",
+              mainNetInflow: -100_000,
+              raw: { 证券代码: "000001.SZ", 最新价: "99.99", 主力净流入: -100_000 },
             }],
           }],
           usage: {
@@ -270,8 +274,8 @@ describe("portfolio risk policy", () => {
     }
   });
 
-  it("continues the deterministic review when Iwencai fund-flow quota is exhausted", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "livermore-portfolio-quota-"));
+  it("continues the deterministic review when East Money fund-flow query fails", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "livermore-portfolio-fundflow-"));
     const database = new InvestmentDatabase(":memory:");
     database.createPosition({
       symbol: "000001.SZ",
@@ -279,7 +283,7 @@ describe("portfolio risk policy", () => {
       purchasedAt: "2026-07-01T01:30:00.000Z",
       costBasis: 10,
     });
-    const config = loadConfig({ TRACING_ENABLED: "false" });
+    const config = loadConfig({ TRACING_ENABLED: "false", MACOS_NOTIFICATIONS_ENABLED: "false" });
     const telemetry = Telemetry.create(config);
     try {
       const result = await runPortfolioRiskCheck({
@@ -289,7 +293,7 @@ describe("portfolio risk policy", () => {
         reportDirectory: directory,
         now: new Date("2026-07-24T03:30:00.000Z"),
         runAgent: async () => ({
-          analysis: "Futu 行情正常；同花顺问财额度已用完，主力资金暂缺。",
+          analysis: "Futu 行情正常；东方财富资金流向查询失败，主力资金暂缺。",
           futuResults: [{
             source: "futuapi",
             rows: [{
@@ -303,13 +307,13 @@ describe("portfolio risk policy", () => {
               raw: { klineCount: 80, indicatorEngine: "Futu OpenD" },
             }],
           }],
-          iwencaiFundResults: [{
+          fundFlowResults: [{
+            source: "eastmoney",
+            query: "000001.SZ",
+            endpoint: "https://push2.eastmoney.com/api/qt/ulist.np/get",
             success: false,
-            query: "000001.SZ 今日主力资金净流入",
-            unavailable: true,
-            unavailable_reason: "quota_exceeded",
-            message: "今天的次数已用完",
-            datas: [],
+            message: "East Money fund-flow HTTP 502",
+            rows: [],
           }],
           usage: {
             inputTokens: 100,
@@ -320,7 +324,7 @@ describe("portfolio risk policy", () => {
             cost: 0,
             costCurrency: "CNY",
           },
-          skillReadCount: 2,
+          skillReadCount: 1,
           futuQueryCount: 1,
           newsQueryCount: 1,
           fundFlowQueryCount: 1,
@@ -329,7 +333,7 @@ describe("portfolio risk policy", () => {
 
       expect(result).toMatchObject({ checked: 1, warningCount: 0, criticalCount: 0 });
       const report = await readFile(result.reportPath, "utf8");
-      expect(report).toContain("本次额度已用完，主力资金字段暂缺");
+      expect(report).toContain("本次查询失败，主力资金字段暂缺");
       expect(database.listPositions()[0]).toMatchObject({
         latestPrice: 10.2,
         severity: "normal",

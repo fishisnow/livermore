@@ -40,4 +40,5 @@ export interface BriefingPromptInput {
   localNow: string;
   timezone: string;
   sources: SourceItem[];
+  sourceText?: string;
 }

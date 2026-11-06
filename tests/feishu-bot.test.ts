@@ -69,6 +69,7 @@ describe("Feishu bot integration", () => {
     const config = loadConfig({
       FEISHU_APP_ID: "cli_test",
       FEISHU_APP_SECRET: "secret",
+      MACOS_NOTIFICATIONS_ENABLED: "false",
     });
     expect(new MessageCenter(config, database).hasChannels()).toBe(false);
     database.upsertFeishuConversation({

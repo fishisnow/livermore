@@ -1,7 +1,8 @@
 import path from "node:path";
 import { loadConfig } from "./config.js";
 import { runBriefing } from "./briefings/run-briefing.js";
-import type { BriefingTask } from "./briefings/types.js";
+import type { BriefingMode, BriefingTask } from "./briefings/types.js";
+import { taskModes } from "./tasks/task-settings.js";
 
 try {
   const args = parseArgs(process.argv.slice(2));
@@ -10,6 +11,8 @@ try {
     ...(args.at ? { now: new Date(args.at) } : {}),
     ...(args.replay ? { replayPath: path.resolve(args.replay) } : {}),
     force: args.force,
+    ...(args.mode ? { mode: args.mode } : {}),
+    ...(args.scheduledSlot ? { scheduledSlot: args.scheduledSlot } : {}),
     config: loadConfig(),
   });
   console.log(`已生成 ${result.task}（${result.mode}），采用 ${result.sourceCount} 条新来源。运行 ID：${result.runId}`);
@@ -21,11 +24,13 @@ try {
   process.exitCode = 1;
 }
 
-function parseArgs(argv: string[]): { task: BriefingTask; at: string | undefined; replay: string | undefined; force: boolean } {
+function parseArgs(argv: string[]): { task: BriefingTask; at: string | undefined; replay: string | undefined; force: boolean; mode: BriefingMode | undefined; scheduledSlot: string | undefined } {
   let task: BriefingTask | undefined;
   let at: string | undefined;
   let replay: string | undefined;
   let force = false;
+  let mode: BriefingMode | undefined;
+  let scheduledSlot: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -33,13 +38,16 @@ function parseArgs(argv: string[]): { task: BriefingTask; at: string | undefined
     else if (argument === "--at") at = requiredValue(argv, ++index, "--at");
     else if (argument === "--replay") replay = requiredValue(argv, ++index, "--replay");
     else if (argument === "--force") force = true;
+    else if (argument === "--mode") mode = requiredValue(argv, ++index, "--mode") as BriefingMode;
+    else if (argument === "--scheduled-slot") scheduledSlot = requiredValue(argv, ++index, "--scheduled-slot");
     else throw new Error(`Unknown argument: ${argument}`);
   }
 
   if (task !== "market-briefing" && task !== "ai-industry-chain") {
     throw new Error("Usage: npm run briefing -- --task <market-briefing|ai-industry-chain> [--replay file.json] [--at ISO] [--force]");
   }
-  return { task, at, replay, force };
+  if (mode && !taskModes[task].includes(mode)) throw new Error("Invalid task mode.");
+  return { task, at, replay, force, mode, scheduledSlot };
 }
 
 function requiredValue(argv: string[], index: number, flag: string): string {

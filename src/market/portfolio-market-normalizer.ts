@@ -1,20 +1,22 @@
 import type { FutuMarketResult } from "./futu-client.js";
 import { normalizeFutuResult } from "./futu-client.js";
-import type { IwencaiQueryResult } from "./iwencai-client.js";
-import { normalizeIwencaiResults } from "./iwencai-normalizer.js";
+import {
+  normalizeEastmoneyFundFlowResults,
+  type EastmoneyFundFlowResult,
+} from "./eastmoney-fund-flow.js";
 import type { NormalizedMarketQuote } from "./normalized-market.js";
 
 /**
  * Field ownership is deliberately strict:
  * - Futu owns name, latest price, day change, RSI and MACD for every supported holding.
- * - Iwencai contributes only main net inflow and only for mainland securities.
+ * - East Money contributes only main net inflow and only for mainland securities.
  *
  * Keeping this merge deterministic prevents an Agent answer or an unexpected
- * Iwencai column from overwriting the Futu quote used by risk calculations.
+ * fund-flow column from overwriting the Futu quote used by risk calculations.
  */
 export function normalizePortfolioMarketData(
   futuResults: FutuMarketResult[],
-  iwencaiResults: IwencaiQueryResult[],
+  fundFlowResults: EastmoneyFundFlowResult[],
 ): NormalizedMarketQuote[] {
   const merged = new Map<string, NormalizedMarketQuote>();
   for (const result of futuResults) {
@@ -37,7 +39,7 @@ export function normalizePortfolioMarketData(
     }
   }
 
-  for (const quote of normalizeIwencaiResults(iwencaiResults)) {
+  for (const quote of normalizeEastmoneyFundFlowResults(fundFlowResults)) {
     if (!/\.(SH|SZ|BJ)$/.test(quote.symbol)) continue;
     const existing = merged.get(quote.symbol);
     if (!existing || quote.mainNetInflow === undefined) continue;

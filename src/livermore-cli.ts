@@ -1,17 +1,25 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { loadConfig } from "./config.js";
-import { phoenixExecutable, projectRoot, projectSkillsDirectory } from "./project-paths.js";
+import { nodeEntrypointArguments, phoenixExecutable, projectRoot, projectSkillsDirectory } from "./project-paths.js";
 import { listSkillDescriptors } from "./tools/runtime-tools.js";
 
 const command = process.argv[2] ?? "open";
 const args = process.argv.slice(3);
+const desktopApplication = [
+  "/Applications/Livermore.app",
+  path.join(homedir(), "Applications", "Livermore.app"),
+  path.join(projectRoot, "release", "macos.noindex", "Livermore.app"),
+].find((candidate) => existsSync(path.join(candidate, "Contents", "MacOS", "Livermore")));
 
 try {
-  if (command === "open") {
+  if ((command === "open" || command === "ui") && desktopApplication) {
+    execFileSync("/usr/bin/open", [desktopApplication], { stdio: "ignore" });
+    console.log("已打开 Livermore 桌面应用。");
+  } else if (command === "open") {
     await ensureServices();
     await Promise.all([waitForAgentWeb(), waitForPhoenix()]);
     openUi();
@@ -38,6 +46,18 @@ try {
     else runProjectCli("briefing-cli.ts", ["--task", task, ...args.slice(1)]);
   } else if (command === "runs") {
     runProjectCli("runs-cli.ts", args);
+  } else if (command === "cursor") {
+    // A normal installed command should manage the same OAuth session as the app.
+    // Explicit LIVERMORE_WORKSPACE still selects a separate development workspace.
+    if (desktopApplication && !process.env.LIVERMORE_WORKSPACE) {
+      const resources = path.join(desktopApplication, "Contents", "Resources", "runtime");
+      const workspace = path.join(homedir(), "Library", "Application Support", "Livermore");
+      await mkdir(workspace, { recursive: true });
+      execFileSync(path.join(resources, "bin", "node"), [path.join(resources, "src", "cursor-cli.js"), ...args], {
+        cwd: workspace, stdio: "inherit",
+        env: { ...process.env, LIVERMORE_WORKSPACE: workspace, LIVERMORE_RESOURCE_ROOT: resources },
+      });
+    } else runProjectCli("cursor-cli.ts", args);
   } else if (command === "skills") {
     await printSkills();
   } else if (command === "skill" && args[0] === "install") {
@@ -84,12 +104,7 @@ async function schedulesInstalled(): Promise<boolean> {
   const labels = [
     "com.livermore.phoenix",
     "com.livermore.web",
-    "com.livermore.market-pre",
-    "com.livermore.ai-pre",
-    "com.livermore.market-intraday",
-    "com.livermore.market-close",
-    "com.livermore.ai-close",
-    "com.livermore.portfolio-risk",
+    "com.livermore.tasks",
     ...(config.feishuAppId && config.feishuAppSecret ? ["com.livermore.feishu"] : []),
   ];
   try {
@@ -158,9 +173,7 @@ function openUrl(url: string, label: string): void {
 
 function runProjectCli(filename: string, cliArgs: string[]): void {
   const result = spawnSync(process.execPath, [
-    "--import",
-    "tsx",
-    path.join(projectRoot, "src", filename),
+    ...nodeEntrypointArguments(filename),
     ...cliArgs,
   ], {
     cwd: projectRoot,
@@ -246,6 +259,10 @@ function helpText(): string {
   livermore run ai           立即运行 AI 产业链日报
   livermore run portfolio    立即运行持仓风险巡检
   livermore runs             查询任务运行记录
+  livermore cursor login     登录 Cursor 订阅账号
+  livermore cursor status    检查 Cursor 登录状态
+  livermore cursor models    列出 Cursor 账号可用模型
+  livermore cursor verify    验证真实的 Pi 工具调用闭环（仅合成数据）
   livermore skills           列出 Livermore 项目 Skills
   livermore skill install <name>  安装一个 Iwencai SkillHub Skill
   livermore ui               打开 Agent 对话界面

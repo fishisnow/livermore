@@ -11,11 +11,30 @@
 5. 观测不阻塞业务：Phoenix 不可用时任务仍能完成。
 6. 模型与数据源仍是网络依赖；“本地”不等于完全离线。
 
+模型传输支持 API Provider 和 Cursor 订阅 Provider。`PI_PROVIDER=cursor` 时，独立 Node 子进程使用 Pi 1.5.0 的扩展加载器与 ModelRuntime 加载固定版本的社区 `pi-cursor` Provider，直接将 Cursor 原生事件转换为标准 Pi ToolCall。父进程 Pi Agent Core 保留 Agent 循环、业务工具白名单和参数校验，通过 IPC 将 ToolResult 交还 Provider 继续同一会话；不再调用 Cursor CLI 或解析文本 JSON 工具协议。每个 Agent 有独立 sessionId，错误、取消和超时进入现有 Trace。独立浏览器 OAuth 凭据、Provider 缓存和会话日志保存在工作区 `data/runtime/pi-cursor/`，不读取 IDE、CLI 或全局 Pi 的凭据。该适配不是 Cursor 官方 SDK；Provider 可能估算部分用量，订阅用量不使用 API token 单价。
+
+```mermaid
+sequenceDiagram
+    participant Agent as Livermore / Pi Agent Core
+    participant Host as 隔离 Pi ModelRuntime
+    participant Cursor as Cursor 服务
+    Agent->>Host: TranscriptContext + 工具定义（IPC）
+    Host->>Cursor: 原生流式请求
+    Cursor-->>Host: ToolCall
+    Host-->>Agent: 标准 Pi ToolCall 事件
+    Agent->>Agent: 白名单 / 参数校验 / 执行工具
+    Agent->>Host: ToolResult（IPC）
+    Host->>Cursor: 续传结果
+    Cursor-->>Agent: 最终回答（经 Host 转发）
+```
+
 ## 2. 系统上下文
 
 ```mermaid
 flowchart LR
     User["投资研究用户"] --> CLI["交互式 CLI"]
+    User --> Desktop["macOS AppKit / WebKit 桌面应用"]
+    Desktop --> Web
     User --> Web["Agent Web / Pi 持续对话"]
     User --> FeishuAgent["飞书 Agent / 长连接对话"]
     Launchd["macOS launchd"] --> Worker["日报 / 持仓巡检 Worker"]
@@ -34,10 +53,10 @@ flowchart LR
     Worker --> Message["消息中心"]
     Message --> FeishuAgent
     Message --> WeCom["企业微信机器人"]
-    Agent --> DeepSeek["DeepSeek API"]
+    Agent --> DeepSeek["DeepSeek / 自定义模型 API"]
     Worker --> Sources["公开市场与新闻来源"]
     Worker --> Futu["Futu OpenD / OpenAPI"]
-    Worker --> Iwencai["同花顺问财 OpenAPI · 仅A股主力资金"]
+    Worker --> Eastmoney["东方财富数据中心 · 仅A股主力资金"]
     Worker -. 可选 .-> Tavily["Tavily Remote MCP"]
 ```
 
@@ -61,7 +80,7 @@ flowchart LR
 
 模型不自主浏览网页。采集结果先被归一化为 `SourceItem`，提示词明确将网页视作不可信数据，Agent 只负责基于证据综合和表达。
 
-持仓巡检的 Agent 只开放 `read_skill`、`query_futu_market`、`query_futu_news` 与 `query_a_share_main_fund_flow`。它必须先读取 `futuapi`，通过本机 Futu OpenD 获取全部持仓的最新价、当日涨跌、日 K 线 RSI/MACD，以及持仓相关的最新新闻、公告和评级；只有存在沪深京持仓时，才读取 `hithink-market-query` 并查询 A 股主力净流入。港股不适用本任务定义的主力净流入指标，工具层会拒绝传入港股代码，Prompt 也禁止展示或推断该字段。外层合并器实施严格字段归属：Futu 独占名称、价格、涨跌与技术指标，同花顺只允许补充 A 股主力资金；即使问财意外返回价格字段也不会被业务逻辑采纳。盈亏和报警等级只读取合并后的 `NormalizedMarketQuote`，由确定性代码重新计算。每个对象保留数据源、原始快照、查询语句和问财 Trace ID，既保留 Agent 的 Skill 驱动能力和审计证据，也避免模型混用数据源、决定止损或降低风险等级。
+持仓巡检的 Agent 只开放 `read_skill`、`query_futu_market`、`query_futu_news` 与 `query_a_share_main_fund_flow`。它必须先读取 `futuapi`，通过本机 Futu OpenD 获取全部持仓的最新价、当日涨跌、日 K 线 RSI/MACD，以及持仓相关的最新新闻、公告和评级；只有存在沪深京持仓时，才调用东方财富资金流向接口查询 A 股主力净流入及档位明细。港股不适用本任务定义的主力净流入指标，工具层会拒绝传入港股代码，Prompt 也禁止展示或推断该字段。外层合并器实施严格字段归属：Futu 独占名称、价格、涨跌与技术指标，东方财富只允许补充 A 股主力资金；即使资金流向接口意外返回价格字段也不会被业务逻辑采纳。盈亏和报警等级只读取合并后的 `NormalizedMarketQuote`，由确定性代码重新计算。每个对象保留数据源、原始快照与查询证据，既保留 Agent 的 Skill 驱动能力和审计证据，也避免模型混用数据源、决定止损或降低风险等级。
 
 ## 4. 运行事务与幂等
 
@@ -128,7 +147,7 @@ erDiagram
 ```mermaid
 flowchart TB
     L0["L0 规则记忆\nprompts/SYSTEM.md"]
-    L1["L1 会话状态\nAgent.state"]
+    L1["L1 会话状态\nAgent.state / chat_sessions"]
     L2["L2 运行记忆\ntask_runs / evaluations / alerts"]
     L3["L3 来源记忆\nsources / reported_sources"]
     L4["L4 研究档案\nreports + Markdown"]
@@ -166,7 +185,7 @@ portfolio.risk_check
 │       ├── gen_ai.chat
 │       ├── tool.read_skill
 │       ├── tool.query_futu_market
-│       └── tool.query_a_share_main_fund_flow（仅A股）
+│       └── tool.query_a_share_main_fund_flow（仅A股 · 东方财富）
 ├── market.normalize
 ├── portfolio.position_check
 └── portfolio.alert（按需）
@@ -194,7 +213,13 @@ CLI 是短生命周期进程，退出前调用 `forceFlush()`。Trace 导出失�
 
 ## 9. 消息中心与报警
 
+Web / Mac 对话将完整 Pi transcript（含工具调用与结果）保存到 SQLite chat_sessions；界面只显示用户和助手文本，不展示内部工具载荷。新对话只切换当前选择，历史不自动过期；服务重启或缓存淘汰后可恢复 transcript 与稳定 sessionId 继续对话。内存缓存负责运行锁，不承担唯一持久化。历史删除需用户确认，生成中的会话返回冲突，启动后中断的回答标记为可继续。
+
+自定义研究任务的元数据保存在 custom_tasks，Prompt 与定时复用 task_configurations。其 Worker 通过 Pi 调用现有只读工具并统一保存报告、Trace 和消息；与内置任务共同参与时区调度和时点去重。新建任务默认暂停，删除后仅停止未来计划，历史报告不删除。
+
 消息中心把“记录告警”和“外部投递”分开：先写 `alerts`，再逐通道写 `notification_deliveries`。单个 Webhook 失败不会让任务从成功变为失败。
+
+聊天右侧的消息栏从本地消息账本读取最近 30 条卡片，显示未读数、风险优先级与每个渠道的投递状态；点击后预览 Markdown，并通过 run_id 打开完整报告。已读状态使用 alerts.acknowledged_at，不修改投递状态。macOS 默认通知渠道通过应用内原生 UserNotifications 辅助入口投递短摘要，后台工作进程不弹主窗口、不自行请求权限；通知权限由前台应用请求。系统通知失败仍保留本地消息并继续投递飞书。
 
 当前通道：
 
@@ -214,7 +239,8 @@ CLI 是短生命周期进程，退出前调用 `forceFlush()`。Trace 导出失�
 flowchart TB
     Terminal["系统命令 livermore"] --> Bootstrap["安装/启动协调器"]
     subgraph Mac["单台 macOS 主机"]
-      Launchd["6 个 launchd 日历触发器"]
+      Launchd["launchd 每分钟触发 / 应用内 30 秒检查"]
+      Scheduler["读取 task_configurations\n按时区与时点去重派发"]
       PhoenixLaunchd["Phoenix launchd 常驻服务"]
       WebLaunchd["Agent Web launchd 常驻服务"]
       FeishuLaunchd["Feishu Agent launchd 常驻服务"]
@@ -226,7 +252,9 @@ flowchart TB
       PhoenixProcess["Python 3.12: phoenix serve"]
       TraceDB["data/phoenix"]
       Logs["data/runtime/*.log"]
-      Launchd --> Node
+      Launchd --> Scheduler
+      Scheduler --> AppDB
+      Scheduler --> Node
       Node --> AppDB
       Node --> Files
       Node --> PhoenixProcess
@@ -245,9 +273,13 @@ flowchart TB
     Bootstrap --> PhoenixProcess
 ```
 
-Phoenix 安装在项目独立的 `.venv-phoenix/`，由 `launchd` 登录时启动并保持运行，不依赖 Docker daemon。默认工作日时间：市场简报 08:30、12:00、16:10；AI 产业链日报 08:45、17:00；持仓巡检 11:00、14:30。`launchd` 使用系统时区，任务日期使用 `APP_TIMEZONE`，两者应保持一致。
+Phoenix 安装在项目独立的 `.venv-phoenix/`，由 `launchd` 登录时启动并保持运行，不依赖 Docker daemon。默认工作日时间：市场简报 08:30、12:00、16:10；AI 产业链日报 08:45、17:00；持仓巡检 11:00、14:30。用户在“任务与记录”中编辑启停、运行日、时间/模式、时区与 Prompt，保存于 SQLite task_configurations（版本校验防止并发覆盖）。每次运行读取配置快照，来源与持仓仍实时注入；计划按任务时区解释，不依赖系统时区。task_schedule_dispatches 对任务、当地日期及时点去重；最多补发迟到两分钟的时点，不重放过期整日任务。旧静态触发器按工作区归属迁移并备份。
 
-`~/.local/bin/livermore` 指向仓库中的轻量启动器。默认命令检查 Agent Web、Phoenix 和 launchd 注册状态，等待本地服务健康后，通过 macOS 打开 `http://127.0.0.1:4310`。Phoenix `http://localhost:6006` 只作为二级 Trace 观测台。
+`~/.local/bin/livermore` 指向仓库中的轻量启动器。已安装或构建桌面版时，默认命令优先打开 Livermore.app；否则检查 Agent Web、Phoenix 和 launchd 注册状态后，打开 `http://127.0.0.1:4310`。Phoenix `http://localhost:6006` 作为 Trace 观测台。
+
+桌面版使用原生 AppKit 窗口和系统 WebKit，内置独立 Node 可执行文件及编译后的后台代码。应用资源目录只保存代码、网页和初始 Skills；`LIVERMORE_WORKSPACE` 指向 `~/Library/Application Support/Livermore/`，保存 `.env`、SQLite、报告和用户 Skills。`LIVERMORE_RESOURCE_ROOT` 指向应用包内资源目录。源码与编译产物通过统一的入口解析启动任务，安装后无需 tsx 或开发目录。
+
+桌面宿主优先复用工作区标识匹配的本地服务；否则启动绑定 `127.0.0.1:4311` 的后端，并按配置启动飞书和可用的 Phoenix。退出时只停止自己托管的服务。用户从应用菜单启用后台模式后，launchd 使用内置 Node、编译后入口及明确的数据目录，应用退出后任务仍会继续运行。Trace 在独立应用窗口打开。详细生命周期、导入和打包说明见[macOS 桌面版](MACOS.md)。
 
 ## 11. 故障语义
 

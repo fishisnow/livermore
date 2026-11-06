@@ -32,7 +32,7 @@ describe("Futu portfolio market data", () => {
     expect(extractIndicatorValue(result, "RSI1")).toBeUndefined();
   });
 
-  it("keeps Futu ownership of quotes and accepts only Iwencai main fund flow", () => {
+  it("keeps Futu ownership of quotes and accepts only East Money main fund flow", () => {
     const futu = {
       source: "futuapi" as const,
       rows: [{
@@ -53,15 +53,16 @@ describe("Futu portfolio market data", () => {
     });
 
     const merged = normalizePortfolioMarketData([futu], [{
-      query: "600519 主力净流入",
-      datas: [{
-        股票代码: "600519.SH",
-        股票简称: "问财名称不应覆盖",
-        最新价: 9_999,
-        最新涨跌幅: 8.8,
-        RSI: 99,
-        MACD: 99,
-        主力净流入: -123_000,
+      source: "eastmoney",
+      query: "600519.SH",
+      endpoint: "https://push2.eastmoney.com/api/qt/ulist.np/get",
+      success: true,
+      rows: [{
+        symbol: "600519.SH",
+        code: "600519",
+        name: "东方财富名称不应覆盖",
+        mainNetInflow: -123_000,
+        raw: { 证券简称: "东方财富名称不应覆盖", 最新价: 9_999, 主力净流入: -123_000 },
       }],
     }]);
     expect(merged[0]).toMatchObject({
@@ -74,7 +75,7 @@ describe("Futu portfolio market data", () => {
     });
   });
 
-  it("does not apply Iwencai fields to Hong Kong holdings", () => {
+  it("does not apply East Money fund-flow fields to Hong Kong holdings", () => {
     const merged = normalizePortfolioMarketData([{
       source: "futuapi",
       rows: [{
@@ -84,10 +85,15 @@ describe("Futu portfolio market data", () => {
         raw: {},
       }],
     }], [{
-      datas: [{
-        股票代码: "00700.HK",
-        最新价: 1,
-        主力净流入: 999,
+      source: "eastmoney",
+      query: "00700.HK",
+      endpoint: "https://push2.eastmoney.com/api/qt/ulist.np/get",
+      success: true,
+      rows: [{
+        symbol: "00700.HK",
+        code: "00700",
+        mainNetInflow: 999,
+        raw: { 主力净流入: 999 },
       }],
     }]);
     expect(merged[0]).toMatchObject({ currentPrice: 443 });

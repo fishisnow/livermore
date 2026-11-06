@@ -68,16 +68,7 @@ pre-market 聚焦隔夜海外动态与当日 A/H 股观察；close 聚焦全天�
 };
 
 function commonInstructions(input: BriefingPromptInput): string {
-  const sources = input.sources.length === 0
-    ? "（本次没有未报道的新来源）"
-    : input.sources.map((source, index) => [
-        `[S${index + 1}] ${source.title}`,
-        `分类：${source.category}`,
-        `发布时间：${source.publishedAt ?? "来源未提供"}`,
-        `检索时间：${source.retrievedAt}`,
-        `URL：${source.url}`,
-        `摘要：${source.summary}`,
-      ].join("\n")).join("\n\n");
+  const sources = input.sourceText ?? formatBriefingSources(input.sources);
 
   return `生成一份可直接发布的中文 Markdown 日报。当前本地时间为 ${input.localNow}（${input.timezone}），对应 UTC 时间 ${input.nowIso}。标题日期必须使用本地日期。
 
@@ -95,6 +86,20 @@ function commonInstructions(input: BriefingPromptInput): string {
 
 来源材料：
 ${sources}`;
+}
+
+export function formatBriefingSources(items: BriefingPromptInput["sources"]): string {
+  return items.length === 0
+    ? "（本次没有未报道的新来源）"
+    : items.map((source, index) => [
+        `[S${index + 1}] ${source.title}`,
+        `分类：${source.category}`,
+        `发布时间：${source.publishedAt ?? "来源未提供"}`,
+        `检索时间：${source.retrievedAt}`,
+        `URL：${source.url}`,
+        `摘要：${source.summary}`,
+      ].join("\n")).join("\n\n");
+
 }
 
 export function resolveMarketMode(date: Date, timezone: string): MarketMode {

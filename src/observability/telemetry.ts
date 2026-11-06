@@ -208,11 +208,13 @@ export function observeAgent(
     result.usage.cacheReadTokens += usage.cacheRead;
     result.usage.cacheWriteTokens += usage.cacheWrite;
     result.usage.reasoningTokens += usage.reasoning ?? 0;
-    const modelCost = telemetry.calculateModelCost(usage);
+    // Subscription usage is not billed at the .env API token rates.
+    const modelCost = message.provider === "cursor" ? 0 : telemetry.calculateModelCost(usage);
     result.usage.cost += modelCost;
     if (!modelSpan) return;
     modelSpan.setAttributes({
       "gen_ai.provider.name": message.provider,
+      "livermore.billing.mode": message.provider === "cursor" ? "subscription" : "api",
       "gen_ai.request.model": message.model,
       "gen_ai.response.model": message.responseModel ?? message.model,
       "gen_ai.response.finish_reasons": message.stopReason,
@@ -251,6 +253,7 @@ function traceOutput(value: string): Attributes {
 function serializeAgentContext(agent: Agent): string {
   return safeJson({
     systemPrompt: agent.state.systemPrompt,
+    tools: agent.state.tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
     messages: agent.state.messages.map(messageForTrace),
   });
 }

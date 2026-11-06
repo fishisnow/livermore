@@ -3,6 +3,12 @@ const state = {
   sending: false,
   dashboard: null,
   positions: [],
+  view: "chat",
+  taskConfig: null,
+  taskConfigDirty: false,
+  notificationRunId: null,
+  chats: [],
+  switchingChat: false,
 };
 
 const elements = {
@@ -35,7 +41,108 @@ const elements = {
   traceLink: document.querySelector("#trace-link"),
   traceLookup: document.querySelector("#trace-lookup"),
   traceId: document.querySelector("#trace-id"),
+  notifications: document.querySelector("#notification-list"),
+  notificationDialog: document.querySelector("#notification-dialog"),
+  taskConfigDialog: document.querySelector("#task-config-dialog"),
 };
+
+// The same workspace runs in WebKit and in a browser; native integration is optional.
+const nativeBridge = window.webkit?.messageHandlers?.livermore;
+document.body.classList.toggle("is-desktop", Boolean(window.livermoreDesktop));
+const systemAppearance = matchMedia("(prefers-color-scheme: dark)");
+let appearance = localStorage.getItem("livermore.appearance") || window.livermoreInitialAppearance || "system";
+function setAppearance(value) {
+  appearance = ["system", "light", "dark"].includes(value) ? value : "system";
+  localStorage.setItem("livermore.appearance", appearance);
+  document.documentElement.dataset.theme = appearance === "system" ? (systemAppearance.matches ? "dark" : "light") : appearance;
+  document.querySelector("#appearance").value = appearance;
+  nativeBridge?.postMessage({ type: "appearance", value: appearance });
+}
+systemAppearance.addEventListener("change", () => { if (appearance === "system") setAppearance("system"); });
+document.querySelector("#appearance").addEventListener("change", (event) => setAppearance(event.target.value));
+setAppearance(appearance);
+document.body.dataset.sidebar = localStorage.getItem("livermore.sidebar") || "expanded";
+document.body.dataset.inspector = localStorage.getItem("livermore.inspector") || "auto";
+const compactWindow = matchMedia("(max-width: 1180px)");
+function syncInspector() {
+  const mode = document.body.dataset.inspector;
+  document.querySelector("#toggle-inspector").setAttribute("aria-expanded", String(mode === "open" || (mode === "auto" && !compactWindow.matches)));
+}
+function toggleInspector() {
+  // Read layout instead of a cached ARIA value: resize events can arrive after a click.
+  const open = document.querySelector(".task-rail").getClientRects().length > 0;
+  document.body.dataset.inspector = open ? "closed" : "open";
+  localStorage.setItem("livermore.inspector", document.body.dataset.inspector);
+  syncInspector();
+}
+function toggleSidebar() {
+  document.body.dataset.sidebar = document.body.dataset.sidebar === "collapsed" ? "expanded" : "collapsed";
+  localStorage.setItem("livermore.sidebar", document.body.dataset.sidebar);
+}
+compactWindow.addEventListener("change", syncInspector);
+syncInspector();
+document.querySelector("#toggle-sidebar").addEventListener("click", toggleSidebar);
+document.querySelector("#toggle-inspector").addEventListener("click", toggleInspector);
+document.querySelector(".conversation").addEventListener("pointerdown", () => {
+  if (compactWindow.matches && document.body.dataset.inspector === "open") toggleInspector();
+});
+document.querySelector("#native-settings").addEventListener("click", () => nativeBridge?.postMessage({ type: "settings" }));
+const views = {
+  chat: ["研究对话", "与你的本地投资 Agent 一起研究"],
+  portfolio: ["我的持仓", "持仓维护 · 风险监测 · 操作建议"],
+  tasks: ["任务与记录", "自动研究计划与最近运行记录"],
+  capabilities: ["研究能力", "已安装的 Skills、MCP 与数据连接"],
+};
+// Reuse the existing functional panels without modal nesting or duplicate controls.
+for (const panel of [elements.portfolioDialog, elements.capabilityDialog]) {
+  panel.classList.add("workspace-panel");
+  panel.tabIndex = -1;
+  document.querySelector(".workspace").append(panel);
+}
+async function setView(view, { refresh = false } = {}) {
+  if (!views[view]) return;
+  state.view = view;
+  document.body.dataset.view = view;
+  document.querySelector("#view-title").textContent = views[view][0];
+  document.querySelector("#view-subtitle").textContent = views[view][1];
+  document.querySelectorAll("[data-view-target]").forEach((button) => {
+    const selected = button.dataset.viewTarget === view;
+    button.classList.toggle("selected", selected);
+    if (selected) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  for (const [name, panel] of [["portfolio", elements.portfolioDialog], ["capabilities", elements.capabilityDialog]]) {
+    if (view === name && !panel.open) { panel.show(); panel.focus({ preventScroll: true }); }
+    else if (view !== name && panel.open) panel.close();
+  }
+  if (view === "portfolio") {
+    if (!document.querySelector("#position-purchased-at").value) document.querySelector("#position-purchased-at").value = toDateTimeLocal(new Date());
+    await loadPortfolio();
+  } else if (view === "capabilities") await loadCapabilities(refresh);
+}
+document.querySelectorAll("[data-view-target]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.viewTarget)));
+function newConversation() {
+  if (state.sending || state.switchingChat) { showToast("请等待当前对话操作完成后再开始新对话"); return; }
+  state.sessionId = "";
+  localStorage.removeItem("livermore.sessionId");
+  elements.messages.replaceChildren(elements.welcome);
+  elements.welcome.hidden = false;
+  elements.prompt.value = ""; autoSize();
+  document.querySelector("#chat-session-title").textContent = "研究会话";
+  loadChatHistory();
+  setView("chat");
+  elements.prompt.focus();
+}
+window.livermoreUI = { setAppearance, setView, toggleSidebar, toggleInspector, newConversation, openNotification, notificationStatus, openTaskConfig, openChat, openNewTaskConfig };
+nativeBridge?.postMessage({ type: "notification-status" });
+document.addEventListener("keydown", (event) => {
+  if (event.metaKey && !event.altKey && !event.shiftKey) {
+    if (event.key.toLowerCase() === "n") { event.preventDefault(); newConversation(); }
+    const view = ["chat", "portfolio", "tasks", "capabilities"][Number(event.key) - 1];
+    if (view) { event.preventDefault(); setView(view); }
+  }
+  if (event.key === "Escape" && state.view === "chat" && compactWindow.matches && document.body.dataset.inspector === "open" && !elements.dialog.open) toggleInspector();
+});
 
 document.querySelector("#clock").textContent = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
@@ -58,31 +165,41 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
   button.addEventListener("click", () => sendMessage(button.dataset.prompt));
 });
 
-document.querySelector("#new-session").addEventListener("click", () => {
-  state.sessionId = "";
-  localStorage.removeItem("livermore.sessionId");
-  elements.messages.replaceChildren(elements.welcome);
-  elements.welcome.hidden = false;
-  showToast("已开始新对话");
-});
+document.querySelector("#new-session").addEventListener("click", newConversation);
+document.querySelector("#sidebar-new").addEventListener("click", newConversation);
 
 document.querySelector("#refresh").addEventListener("click", loadDashboard);
+document.querySelector("#refresh-tasks").addEventListener("click", loadDashboard);
+document.querySelector("#new-research-task").addEventListener("click", openNewTaskConfig);
+document.querySelector("#delete-custom-task").addEventListener("click", deleteCustomTask);
+document.querySelector("#refresh-chats").addEventListener("click", () => loadChatHistory());
+document.querySelector("#more-chats").addEventListener("click", () => loadChatHistory(true));
+document.querySelector("#notification-permission").addEventListener("click", () => nativeBridge?.postMessage({ type: "notification-permission" }));
+document.querySelector("#close-notification").addEventListener("click", () => elements.notificationDialog.close());
+document.querySelector("#notification-run").addEventListener("click", () => { elements.notificationDialog.close(); if (state.notificationRunId) openRun(state.notificationRunId); });
+document.querySelector("#task-config-form").addEventListener("submit", saveTaskConfig);
+document.querySelector("#task-config-form").addEventListener("input", () => { state.taskConfigDirty = true; });
+document.querySelector("#close-task-config").addEventListener("click", closeTaskConfig);
+elements.taskConfigDialog.addEventListener("cancel", (event) => { event.preventDefault(); closeTaskConfig(); });
+document.querySelector("#add-task-time").addEventListener("click", () => { appendTaskTime("09:00", state.taskConfig?.modes[0]); state.taskConfigDirty = true; });
+document.querySelector("#reset-task-prompt").addEventListener("click", () => { if (state.taskConfig && confirm("恢复默认 Prompt？当前未保存的 Prompt 将被替换。")) { document.querySelector("#task-prompt").value = state.taskConfig.defaultPrompt; state.taskConfigDirty = true; } });
 document.querySelector("#view-all-runs").addEventListener("click", () => {
-  elements.recentRuns.scrollIntoView({ behavior: "smooth", block: "start" });
-  showToast("这里显示最近 12 次运行，可点击查看报告");
+  setView("tasks");
 });
 document.querySelector("#close-dialog").addEventListener("click", () => elements.dialog.close());
 document.querySelector("#portfolio-open").addEventListener("click", openPortfolio);
-document.querySelector("#close-portfolio-dialog").addEventListener("click", () => elements.portfolioDialog.close());
+document.querySelector("#close-portfolio-dialog").addEventListener("click", () => setView("chat"));
 document.querySelector("#position-form").addEventListener("submit", savePosition);
 document.querySelector("#cancel-position-edit").addEventListener("click", resetPositionForm);
 document.querySelector("#run-portfolio-check").addEventListener("click", runPortfolioCheck);
 document.querySelector("#capability-details").addEventListener("click", () => openCapabilities(true));
-document.querySelector("#close-capability-dialog").addEventListener("click", () => elements.capabilityDialog.close());
+document.querySelector("#close-capability-dialog").addEventListener("click", () => setView("chat"));
 document.querySelector("#refresh-capabilities").addEventListener("click", () => openCapabilities(true));
 elements.traceLookup.addEventListener("submit", openTraceById);
 
 loadDashboard();
+loadPortfolio();
+restoreConversation();
 setInterval(loadDashboard, 12_000);
 
 async function loadDashboard() {
@@ -91,14 +208,20 @@ async function loadDashboard() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     state.dashboard = await response.json();
     renderDashboard(state.dashboard);
-    elements.systemStatus.textContent = `${state.dashboard.agent.provider} / ${state.dashboard.agent.model}`;
+    await loadNotifications();
+    const { provider, model } = state.dashboard.agent;
+    elements.systemStatus.textContent = `${provider} · ${model.split("/").filter(Boolean).at(-1)}`;
+    elements.systemStatus.title = `${provider} / ${model}`;
+    document.body.dataset.connection = "ready";
   } catch (error) {
+    document.body.dataset.connection = "error";
     elements.systemStatus.textContent = "本地服务连接异常";
     console.error(error);
   }
 }
 
 function renderDashboard(data) {
+  document.querySelector("#nav-task-count").textContent = String(data.tasks.length);
   elements.traceLink.href = data.agent.phoenixUrl;
   elements.tasks.innerHTML = data.tasks.map((task) => {
     const run = task.running || task.latest;
@@ -106,18 +229,18 @@ function renderDashboard(data) {
     return `
       <article class="task-card ${escapeHtml(status)}">
         <div class="task-title-row">
-          <strong>${escapeHtml(task.title)}</strong>
+          <button class="task-title-button" data-edit-task="${escapeHtml(task.task)}" type="button">${escapeHtml(task.title)}</button>
           <span class="task-status ${escapeHtml(status)}">${statusLabel(status)}</span>
         </div>
         <p class="task-schedule">${escapeHtml(task.schedule)}</p>
         <div class="task-facts">
-          <span>${run ? task.task === "portfolio-risk-check" ? `${run.sourceCount} 持仓` : `${run.sourceCount} 来源` : "尚无运行"}</span>
+          <span>${run ? task.custom ? `${run.sourceCount} 次工具调用` : task.task === "portfolio-risk-check" ? `${run.sourceCount} 持仓` : `${run.sourceCount} 来源` : "尚无运行"}</span>
           <span>${run?.durationMs != null ? formatDuration(run.durationMs) : "—"}</span>
           <span>${run ? task.task === "portfolio-risk-check" ? `${run.warningCount} 风险` : `${run.inputTokens + run.outputTokens} tok` : "—"}</span>
         </div>
         <div class="task-actions">
           <button class="run-now" data-run-task="${escapeHtml(task.task)}">立即运行</button>
-          <span class="last-time">${run ? relativeTime(run.startedAt) : "等待首次运行"}</span>
+          <button class="edit-task" data-edit-task="${escapeHtml(task.task)}" type="button">Prompt 与定时 ↗</button>
         </div>
       </article>`;
   }).join("");
@@ -125,6 +248,7 @@ function renderDashboard(data) {
   elements.tasks.querySelectorAll("[data-run-task]").forEach((button) => {
     button.addEventListener("click", () => runTask(button.dataset.runTask, button));
   });
+  elements.tasks.querySelectorAll("[data-edit-task]").forEach((button) => button.addEventListener("click", () => openTaskConfig(button.dataset.editTask)));
 
   elements.recentRuns.innerHTML = data.recentRuns.length ? data.recentRuns.map((run) => `
     <button class="run-row" type="button" data-run-id="${escapeHtml(run.id)}">
@@ -154,12 +278,193 @@ function renderDashboard(data) {
     .join("");
 }
 
-async function openPortfolio() {
-  if (!elements.portfolioDialog.open) elements.portfolioDialog.showModal();
-  if (!document.querySelector("#position-purchased-at").value) {
-    document.querySelector("#position-purchased-at").value = toDateTimeLocal(new Date());
+function notificationStatus(status) {
+  const label = document.querySelector("#notification-permission-status");
+  label.textContent = status === "authorized" ? "Mac 通知已开启" : status === "denied" ? "Mac 通知被系统关闭" : "允许 Mac 通知，及时接收风险提醒";
+  document.querySelector("#notification-permission").hidden = status === "authorized";
+  document.querySelector("#notification-permission").textContent = status === "denied" ? "系统设置" : "开启通知";
+}
+
+function channelBadges(deliveries) {
+  if (!deliveries.length) return '<span class="delivery-badge">已存本地</span>';
+  const groups = new Map();
+  for (const item of deliveries) {
+    const name = item.channel === "macos" ? "Mac" : item.channel.startsWith("feishu") ? "飞书" : item.channel === "wechat-work" ? "企业微信" : item.channel;
+    const old = groups.get(name);
+    groups.set(name, { count: (old?.count || 0) + 1, failed: item.status !== "sent" || old?.failed });
   }
-  await loadPortfolio();
+  return [...groups].map(([name, value]) => `<span class="delivery-badge ${value.failed ? "failed" : "sent"}">${escapeHtml(name)}${value.count > 1 ? ` ×${value.count}` : ""} · ${value.failed ? "未投递" : "已投递"}</span>`).join("");
+}
+
+async function loadNotifications() {
+  try {
+    const response = await fetch("/api/notifications");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    document.querySelector("#notification-count").textContent = String(data.unreadCount);
+    document.querySelector("#notification-count").title = `${data.unreadCount} 条未读消息`;
+    document.querySelector("#notification-indicator").hidden = data.unreadCount === 0;
+    if (!data.macosEnabled) {
+      document.querySelector("#notification-permission-status").textContent = "Mac 通知已在本地配置中停用";
+      document.querySelector("#notification-permission").hidden = true;
+    }
+    elements.notifications.innerHTML = data.messages.length ? data.messages.map((item) => `
+      <button class="notification-card ${escapeHtml(item.severity)} ${item.readAt ? "" : "unread"}" data-notification-id="${escapeHtml(item.id)}" type="button">
+        <span class="notification-card-meta"><span class="notification-severity">${({ critical: "高优先级", warning: "需要关注", info: "研究更新" })[item.severity] || "消息"}</span><time datetime="${escapeHtml(item.createdAt)}">${relativeTime(item.createdAt)}</time></span>
+        <strong>${escapeHtml(item.title.replace(/^Livermore\s*/, ""))}</strong>
+        <span class="notification-preview">${escapeHtml(item.preview)}</span>
+        <span class="delivery-badges">${channelBadges(item.deliveries)}</span>
+      </button>`).join("") : '<div class="inbox-empty"><strong>还没有推送消息</strong><p>任务完成或发现风险后，摘要会保存在这里，并推送到已启用的渠道。</p></div>';
+    elements.notifications.querySelectorAll("[data-notification-id]").forEach((button) => button.addEventListener("click", () => openNotification(button.dataset.notificationId)));
+  } catch (error) { console.error("消息读取失败", error); }
+}
+
+async function openNotification(id) {
+  document.querySelector("#notification-title").textContent = "正在读取消息…";
+  document.querySelector("#notification-meta").replaceChildren();
+  document.querySelector("#notification-body").replaceChildren();
+  document.querySelector("#notification-run").hidden = true;
+  state.notificationRunId = null;
+  if (!elements.notificationDialog.open) elements.notificationDialog.showModal();
+  try {
+    const response = await fetch(`/api/notifications/${encodeURIComponent(id)}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const message = await response.json();
+    document.querySelector("#notification-title").textContent = message.title;
+    document.querySelector("#notification-meta").innerHTML = `<span>${escapeHtml(formatDate(message.createdAt))}</span>${channelBadges(message.deliveries)}`;
+    document.querySelector("#notification-body").innerHTML = renderReportMarkdown(message.body);
+    state.notificationRunId = message.runId;
+    document.querySelector("#notification-run").hidden = !message.runId;
+    const acknowledged = await fetch(`/api/notifications/${encodeURIComponent(id)}/read`, { method: "POST" });
+    if (!acknowledged.ok) throw new Error("已读状态保存失败");
+    await loadNotifications();
+  } catch (error) { document.querySelector("#notification-body").textContent = `消息读取失败：${error.message}`; }
+}
+
+async function openTaskConfig(task) {
+  if (elements.taskConfigDialog.open) return;
+  try {
+    const response = await fetch(task ? `/api/tasks/${encodeURIComponent(task)}/config` : "/api/tasks/template");
+    const value = await response.json();
+    if (!response.ok) throw new Error(value.error || `HTTP ${response.status}`);
+    state.taskConfig = value;
+    state.taskConfigDirty = false;
+    document.querySelector("#task-config-title").textContent = task ? value.title : "新增研究任务";
+    document.querySelector("#task-name-field").hidden = !value.custom;
+    document.querySelector("#task-name").required = Boolean(value.custom);
+    document.querySelector("#task-name").value = value.custom ? value.title : "";
+    document.querySelector("#delete-custom-task").hidden = !value.custom || !value.task;
+    document.querySelector("#save-task-config").textContent = task ? "保存配置" : "创建研究任务";
+    document.querySelector("#task-enabled").checked = value.enabled;
+    document.querySelector("#task-timezone").value = value.timezone;
+    document.querySelector("#task-prompt").value = value.prompt;
+    document.querySelector("#task-config-error").textContent = value.schedulerEnabled ? "" : "全局调度已停用。需在 .env 中启用 TASK_SCHEDULER_ENABLED 后重启服务。";
+    document.querySelector("#task-prompt-help").textContent = value.custom ? "独立研究 Agent 可调用已安装的只读 Skills 和工具。支持 {{localNow}}、{{timezone}}、{{nowIso}}、{{mode}}；默认不启用定时，可先手动运行验证。" : task === "portfolio-risk-check"
+      ? "编辑巡检任务指令。运行时会注入时间、真实持仓和数据口径；工具权限与确定性风险复核仍保持生效。"
+      : "运行时变量：{{sources}} 来源（必须保留）、{{localNow}} 本地时间、{{timezone}} 时区、{{nowIso}} UTC 时间、{{mode}} 模式。";
+    document.querySelector("#task-weekdays").innerHTML = ["一", "二", "三", "四", "五", "六", "日"].map((day, index) => `<label><input type="checkbox" value="${index + 1}" ${value.weekdays.includes(index + 1) ? "checked" : ""}><span>${day}</span></label>`).join("");
+    document.querySelector("#task-times").replaceChildren();
+    for (const item of value.times) appendTaskTime(item.time, item.mode);
+    elements.taskConfigDialog.showModal();
+  } catch (error) { showToast(`任务配置读取失败：${error.message}`); }
+}
+
+function openNewTaskConfig() { return openTaskConfig(null); }
+
+async function deleteCustomTask() {
+  const config = state.taskConfig;
+  if (!config?.custom || !config.task || !confirm(`删除“${config.title}”并停止后续定时运行？已有报告与运行记录会保留，已开始的任务仍可完成。`)) return;
+  try {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(config.task)}`, { method: "DELETE" });
+    if (!response.ok) throw new Error((await response.json()).error || `HTTP ${response.status}`);
+    state.taskConfigDirty = false; elements.taskConfigDialog.close(); state.taskConfig = null;
+    showToast("研究任务已删除，历史报告已保留"); await loadDashboard();
+  } catch (error) { document.querySelector("#task-config-error").textContent = error.message; }
+}
+
+function appendTaskTime(time, mode) {
+  const row = document.createElement("div"); row.className = "task-time-row";
+  row.innerHTML = `<input type="time" aria-label="运行时间" required value="${escapeHtml(time)}"><select aria-label="运行模式">${(state.taskConfig?.modes || []).map((item) => `<option value="${escapeHtml(item)}" ${item === mode ? "selected" : ""}>${escapeHtml(modeLabel(item))}</option>`).join("")}</select><button type="button" aria-label="删除运行时间">×</button>`;
+  row.querySelector("button").addEventListener("click", () => { row.remove(); state.taskConfigDirty = true; });
+  document.querySelector("#task-times").append(row);
+}
+
+function closeTaskConfig() {
+  if (state.taskConfigDirty && !confirm("放弃尚未保存的任务配置？")) return;
+  elements.taskConfigDialog.close(); state.taskConfig = null; state.taskConfigDirty = false;
+}
+
+async function saveTaskConfig(event) {
+  event.preventDefault();
+  const config = state.taskConfig;
+  if (!config) return;
+  const save = document.querySelector("#save-task-config"); save.disabled = true;
+  try {
+    const payload = { revision: config.revision, enabled: document.querySelector("#task-enabled").checked, timezone: document.querySelector("#task-timezone").value.trim(), prompt: document.querySelector("#task-prompt").value,
+      weekdays: [...document.querySelectorAll("#task-weekdays input:checked")].map((input) => Number(input.value)),
+      times: [...document.querySelectorAll(".task-time-row")].map((row) => ({ time: row.querySelector("input").value, mode: row.querySelector("select").value })) };
+    payload.title = document.querySelector("#task-name").value.trim();
+    const response = await fetch(config.task ? `/api/tasks/${encodeURIComponent(config.task)}/config` : "/api/tasks", { method: config.task ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    state.taskConfigDirty = false; elements.taskConfigDialog.close(); state.taskConfig = null;
+    showToast("配置已保存，下次运行使用新 Prompt 与计划"); await loadDashboard();
+  } catch (error) { document.querySelector("#task-config-error").textContent = error.message; }
+  finally { save.disabled = false; }
+}
+
+async function loadChatHistory(more = false) {
+  try {
+    const response = await fetch(`/api/chat/sessions?offset=${more ? state.chats.length : 0}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    state.chats = more ? [...state.chats, ...data.sessions.filter((item) => !state.chats.some((existing) => existing.id === item.id))] : data.sessions;
+    document.querySelector("#more-chats").hidden = data.sessions.length < 100;
+    document.querySelector("#chat-history-list").innerHTML = state.chats.length ? state.chats.map((item) => `<div class="history-row ${item.id === state.sessionId ? "selected" : ""}"><button class="history-open" type="button" data-chat-id="${escapeHtml(item.id)}" title="${escapeHtml(item.title)}"><span>${escapeHtml(item.title)}</span><small>${relativeTime(item.updatedAt)}${item.status === "running" ? " · 生成中" : item.status === "error" || item.status === "interrupted" ? " · 未完成" : ""}</small></button><button class="history-delete" data-delete-chat="${escapeHtml(item.id)}" aria-label="删除会话：${escapeHtml(item.title)}" type="button">×</button></div>`).join("") : '<p class="history-empty">开始对话后，会自动保存在这里。</p>';
+    document.querySelectorAll("[data-chat-id]").forEach((button) => button.addEventListener("click", () => openChat(button.dataset.chatId)));
+    document.querySelectorAll("[data-delete-chat]").forEach((button) => button.addEventListener("click", () => deleteChat(button.dataset.deleteChat)));
+  } catch (error) { console.error("历史会话读取失败", error); }
+}
+
+async function restoreConversation() {
+  await loadChatHistory();
+  if (state.sessionId) await openChat(state.sessionId);
+}
+
+async function openChat(id) {
+  if (state.sending || state.switchingChat) { showToast("请等待当前对话操作完成后再切换"); return; }
+  state.switchingChat = true;
+  try {
+    const response = await fetch(`/api/chat/sessions/${encodeURIComponent(id)}`);
+    if (!response.ok) {
+      if (response.status === 404 && state.sessionId === id) { state.sessionId = ""; localStorage.removeItem("livermore.sessionId"); }
+      throw new Error((await response.json()).error || `HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    state.sessionId = data.id; localStorage.setItem("livermore.sessionId", data.id);
+    elements.messages.replaceChildren(elements.welcome); elements.welcome.hidden = data.messages.length > 0;
+    for (const message of data.messages) appendMessage(message.role, message.text + (message.error ? `\n\n对话没有完成：${message.error}` : ""));
+    if (data.error && !data.messages.some((message) => message.error === data.error)) appendMessage("assistant", `对话没有完成：${data.error}`);
+    document.querySelector("#chat-session-title").textContent = data.title;
+    await setView("chat"); await loadChatHistory(); scrollMessages();
+  } catch (error) { showToast(`历史会话读取失败：${error.message}`); }
+  finally { state.switchingChat = false; }
+}
+
+async function deleteChat(id) {
+  if (state.sending || state.switchingChat) { showToast("请等待当前对话操作完成后再删除"); return; }
+  const title = state.chats.find((item) => item.id === id)?.title || "此会话";
+  if (!confirm(`删除“${title}”及其全部对话消息？此操作不可恢复。`)) return;
+  try {
+    const response = await fetch(`/api/chat/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!response.ok) throw new Error((await response.json()).error || `HTTP ${response.status}`);
+    if (state.sessionId === id) newConversation();
+    await loadChatHistory(); showToast("会话已删除");
+  } catch (error) { showToast(`删除失败：${error.message}`); }
+}
+
+async function openPortfolio() {
+  await setView("portfolio");
 }
 
 async function loadPortfolio() {
@@ -175,6 +480,7 @@ async function loadPortfolio() {
 }
 
 function renderPortfolio(positions) {
+  document.querySelector("#nav-position-count").textContent = String(positions.length);
   const warningCount = positions.filter((item) => item.severity === "warning").length;
   const criticalCount = positions.filter((item) => item.severity === "critical").length;
   document.querySelector("#portfolio-count").textContent = String(positions.length);
@@ -303,7 +609,11 @@ async function runPortfolioCheck() {
 }
 
 async function openCapabilities(refresh = false) {
-  if (!elements.capabilityDialog.open) elements.capabilityDialog.showModal();
+  if (state.view !== "capabilities") await setView("capabilities", { refresh });
+  else await loadCapabilities(refresh);
+}
+
+async function loadCapabilities(refresh = false) {
   elements.skillLedger.innerHTML = loadingLedger();
   elements.mcpLedger.innerHTML = loadingLedger();
   elements.connectionLedger.innerHTML = loadingLedger();
@@ -336,7 +646,7 @@ function renderCapabilities(data) {
     : `<div class="ledger-empty">
         <strong>尚未安装 Livermore 专属 Skill</strong>
         <p>技能应安装到项目的 <code>skills/</code> 目录。全局 Codex Skills 不会出现在这里。</p>
-        <code class="install-command">livermore skill install hithink-market-query</code>
+        <code class="install-command">livermore skill install futuapi</code>
       </div>`;
 
   elements.mcpLedger.innerHTML = data.mcps.map((mcp) => ledgerItem(mcp, [
@@ -381,7 +691,7 @@ function capabilityStatus(status) {
 
 async function sendMessage(rawMessage) {
   const message = rawMessage?.trim();
-  if (!message || state.sending) return;
+  if (!message || state.sending || state.switchingChat) return;
   state.sending = true;
   elements.send.disabled = true;
   elements.prompt.value = "";
@@ -392,6 +702,12 @@ async function sendMessage(rawMessage) {
   let accumulated = "";
 
   try {
+    if (!state.sessionId) {
+      const created = await fetch("/api/chat/sessions", { method: "POST" });
+      const record = await created.json();
+      if (!created.ok) throw new Error(record.error || `HTTP ${created.status}`);
+      state.sessionId = record.id; localStorage.setItem("livermore.sessionId", record.id);
+    }
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -415,6 +731,7 @@ async function sendMessage(rawMessage) {
         if (event.type === "session") {
           state.sessionId = event.data.sessionId;
           localStorage.setItem("livermore.sessionId", state.sessionId);
+          loadChatHistory();
         } else if (event.type === "delta") {
           accumulated += event.data.text;
           assistantBody.innerHTML = renderMarkdown(accumulated);
@@ -437,6 +754,8 @@ async function sendMessage(rawMessage) {
     state.sending = false;
     elements.send.disabled = false;
     elements.toolActivity.hidden = true;
+    if (state.sessionId) await openChat(state.sessionId);
+    await loadChatHistory();
     elements.prompt.focus();
     loadDashboard();
   }
@@ -490,7 +809,7 @@ async function openRun(id) {
       `状态 ${statusLabel(run.status)}`,
       `运行 ${formatDate(run.startedAt)}`,
       `耗时 ${run.durationMs == null ? "—" : formatDuration(run.durationMs)}`,
-      `来源 ${run.sourceCount}`,
+      `${run.task.startsWith("custom-") ? "工具调用" : "来源"} ${run.sourceCount}`,
       `Token ${run.inputTokens + run.outputTokens + run.cacheReadTokens + run.cacheWriteTokens}`,
       `成本 ${formatCost(run.cost, run.costCurrency)}`,
     ];
@@ -715,11 +1034,12 @@ function statusLabel(status) {
 function taskShortName(task) {
   if (task === "market-briefing") return "市场简报";
   if (task === "portfolio-risk-check") return "持仓巡检";
-  return "AI 产业链";
+  if (task === "ai-industry-chain") return "AI 产业链";
+  return state.dashboard?.tasks.find((item) => item.task === task)?.title || "自定义研究";
 }
 
 function modeLabel(mode) {
-  return ({ "pre-market": "早盘", intraday: "盘中", close: "收盘", hourly: "小时巡检" })[mode] || mode;
+  return ({ "pre-market": "早盘", intraday: "盘中", close: "收盘", hourly: "小时巡检", research: "独立研究" })[mode] || mode;
 }
 
 function formatDuration(ms) {
@@ -791,7 +1111,9 @@ function toolLabel(name) {
     list_task_runs: "正在读取任务运行记录",
     get_task_run: "正在读取任务报告",
     search_investment_web: "正在通过 Tavily MCP 搜索",
-    query_iwencai_market: "正在查询同花顺问财行情",
+    query_a_share_main_fund_flow: "正在查询东方财富主力资金",
+    query_futu_market: "正在查询 Futu 行情",
+    query_futu_news: "正在查询 Futu 资讯",
     list_available_skills: "正在检查已安装 Skills",
     read_skill: "正在加载研究 Skill",
     save_research_report: "正在保存研究报告",

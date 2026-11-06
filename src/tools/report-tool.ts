@@ -1,12 +1,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { Type } from "@sinclair/typebox";
+import { obj, str } from "@earendil-works/pi-schema";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { reportsDirectory } from "../project-paths.js";
 
-const reportParameters = Type.Object({
-  name: Type.String({ description: "Short report name without a directory path." }),
-  content: Type.String({ description: "Complete Markdown report content." }),
+const reportParameters = obj({
+  name: str({ description: "Short report name without a directory path." }),
+  content: str({ description: "Complete Markdown report content." }),
 });
 
 export function normalizeReportName(name: string): string {

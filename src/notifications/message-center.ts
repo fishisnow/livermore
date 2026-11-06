@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { AppConfig } from "../config.js";
 import type { InvestmentDatabase } from "../storage/database.js";
 import { FeishuAppClient, feishuMarkdownCard, splitMessage } from "./feishu-app-client.js";
+import { sendMacosNotification, type MacosNotification } from "./macos-channel.js";
 
 export interface MessageInput {
   runId: string | null;
@@ -12,17 +13,23 @@ export interface MessageInput {
 
 interface Channel {
   name: string;
-  send(title: string, body: string): Promise<void>;
+  send(title: string, body: string, context: { id: string; severity: string; runId: string | null }): Promise<void>;
 }
 
 export class MessageCenter {
   private readonly channels: Channel[];
 
-  constructor(private readonly config: AppConfig, private readonly database: InvestmentDatabase) {
+  constructor(private readonly config: AppConfig, private readonly database: InvestmentDatabase, options: { macosSend?: (input: MacosNotification) => Promise<void> } = {}) {
     const feishuAppClient = config.feishuAppId && config.feishuAppSecret
       ? new FeishuAppClient(config)
       : undefined;
     this.channels = [
+      ...(config.macosNotificationsEnabled ? [{
+        name: "macos",
+        async send(title: string, body: string, context: { id: string; severity: string; runId: string | null }) {
+          await (options.macosSend ?? sendMacosNotification)({ ...context, title, body });
+        },
+      }] : []),
       ...(feishuAppClient ? database.listFeishuReportRecipients().map((conversation) => ({
         name: `feishu-app:${shortId(conversation.chatId)}`,
         async send(title: string, body: string) {
@@ -42,7 +49,7 @@ export class MessageCenter {
     const alertId = this.database.saveAlert(input.runId, input.severity, input.title, input.body);
     for (const channel of this.channels) {
       try {
-        await channel.send(input.title, input.body);
+        await channel.send(input.title, input.body, { id: alertId, severity: input.severity, runId: input.runId });
         this.database.recordNotification(alertId, channel.name, "sent");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

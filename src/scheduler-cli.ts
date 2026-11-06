@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { access, mkdir, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { loadConfig } from "./config.js";
-import { phoenixDataDirectory, phoenixExecutable, projectRoot } from "./project-paths.js";
+import { nodeEntrypointArguments, phoenixDataDirectory, phoenixExecutable, projectRoot, resourceRoot } from "./project-paths.js";
 
 interface Schedule {
   label: string;
@@ -14,31 +14,32 @@ interface Schedule {
 }
 
 const schedules: Schedule[] = [
-  briefingSchedule("market-pre", "market-briefing", 8, 30),
-  briefingSchedule("ai-pre", "ai-industry-chain", 8, 45),
-  briefingSchedule("market-intraday", "market-briefing", 12, 0),
-  briefingSchedule("market-close", "market-briefing", 16, 10),
-  briefingSchedule("ai-close", "ai-industry-chain", 17, 0),
-  {
-    label: "portfolio-risk",
-    entrypoint: "portfolio-risk-cli.ts",
-    args: [],
-    times: [
-      { hour: 11, minute: 0 },
-      { hour: 14, minute: 30 },
-    ],
-    description: "工作日 11:00 / 14:30",
-  },
+  { label: "tasks", entrypoint: "task-scheduler-cli.ts", args: [], times: [], description: "每分钟读取本地任务配置，按时区和定时计划派发" },
 ];
 
 const command = process.argv[2];
-if (command !== "install" && command !== "uninstall") {
+if (command === "migrate-tasks") {
+  const directory = path.join(homedir(), "Library", "LaunchAgents");
+  const domain = `gui/${process.getuid?.() ?? 501}`;
+  const sourceIndex = process.argv.indexOf("--from-workspace");
+  const legacyWorkspace = sourceIndex >= 0 ? process.argv[sourceIndex + 1] : projectRoot;
+  if (!legacyWorkspace) throw new Error("--from-workspace requires a workspace path.");
+  if (await migrateLegacySchedules(directory, domain, path.resolve(legacyWorkspace))) {
+    const schedule = schedules[0]!;
+    const label = "com.livermore.tasks";
+    const filename = path.join(directory, `${label}.plist`);
+    try { execFileSync("launchctl", ["bootout", domain, filename], { stdio: "ignore" }); } catch {}
+    await writeFile(filename, plist(label, schedule), "utf8");
+    execFileSync("launchctl", ["bootstrap", domain, filename], { stdio: "inherit" });
+    console.log("已将本工作区的旧定时任务迁移为可配置调度。");
+  }
+} else if (command !== "install" && command !== "uninstall") {
   console.error("Usage: npm run scheduler -- <install|uninstall>");
   process.exitCode = 1;
 } else {
   const directory = path.join(homedir(), "Library", "LaunchAgents");
   const domain = `gui/${process.getuid?.() ?? 501}`;
-  if (command === "install") {
+  if (command === "install" && process.env.LIVERMORE_DESKTOP !== "1") {
     try {
       await access(phoenixExecutable);
     } catch {
@@ -47,7 +48,10 @@ if (command !== "install" && command !== "uninstall") {
   }
   await mkdir(directory, { recursive: true });
   await mkdir(path.join(projectRoot, "data", "runtime"), { recursive: true });
-  await installPhoenixService(command, directory, domain);
+  await migrateLegacySchedules(directory, domain);
+  if (command === "uninstall" || process.env.LIVERMORE_DESKTOP !== "1" || await access(phoenixExecutable).then(() => true, () => false)) {
+    await installPhoenixService(command, directory, domain);
+  }
   await installWebService(command, directory, domain);
   await installFeishuService(command, directory, domain);
   for (const schedule of schedules) {
@@ -91,15 +95,15 @@ async function installFeishuService(command: "install" | "uninstall", directory:
 
 function feishuPlist(label: string): string {
   const logs = path.join(projectRoot, "data", "runtime");
-  const service = path.join(projectRoot, "src", "feishu-bot-cli.ts");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>${label}</string>
   <key>ProgramArguments</key><array>
-    <string>${xml(process.execPath)}</string><string>--import</string><string>tsx</string><string>${xml(service)}</string>
+    ${nodeArgumentsXml("feishu-bot-cli.ts")}
   </array>
   <key>WorkingDirectory</key><string>${xml(projectRoot)}</string>
+  ${runtimeEnvironmentXml()}
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
@@ -129,15 +133,15 @@ async function installWebService(command: "install" | "uninstall", directory: st
 
 function webPlist(label: string): string {
   const logs = path.join(projectRoot, "data", "runtime");
-  const server = path.join(projectRoot, "src", "web-server.ts");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>${label}</string>
   <key>ProgramArguments</key><array>
-    <string>${xml(process.execPath)}</string><string>--import</string><string>tsx</string><string>${xml(server)}</string>
+    ${nodeArgumentsXml("web-server.ts")}
   </array>
   <key>WorkingDirectory</key><string>${xml(projectRoot)}</string>
+  ${runtimeEnvironmentXml()}
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
@@ -191,20 +195,19 @@ function phoenixPlist(label: string): string {
 }
 
 function plist(label: string, schedule: Schedule): string {
-  const cliPath = path.join(projectRoot, "src", schedule.entrypoint);
   const logs = path.join(projectRoot, "data", "runtime");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>${label}</string>
   <key>ProgramArguments</key><array>
-    <string>${xml(process.execPath)}</string><string>--import</string><string>tsx</string>
-    <string>${xml(cliPath)}</string>${schedule.args.map((argument) => `<string>${xml(argument)}</string>`).join("")}
+    ${nodeArgumentsXml(schedule.entrypoint)}${schedule.args.map((argument) => `<string>${xml(argument)}</string>`).join("")}
   </array>
   <key>WorkingDirectory</key><string>${xml(projectRoot)}</string>
-  <key>StartCalendarInterval</key><array>
+  ${runtimeEnvironmentXml()}
+  ${schedule.times.length ? `<key>StartCalendarInterval</key><array>
     ${schedule.times.flatMap((time) => [1, 2, 3, 4, 5].map((weekday) => `<dict><key>Weekday</key><integer>${weekday}</integer><key>Hour</key><integer>${time.hour}</integer><key>Minute</key><integer>${time.minute}</integer></dict>`)).join("\n    ")}
-  </array>
+  </array>` : "<key>StartInterval</key><integer>60</integer><key>RunAtLoad</key><true/>"}
   <key>StandardOutPath</key><string>${xml(path.join(logs, `${schedule.label}.log`))}</string>
   <key>StandardErrorPath</key><string>${xml(path.join(logs, `${schedule.label}.error.log`))}</string>
   <key>ProcessType</key><string>Background</string>
@@ -226,10 +229,45 @@ function briefingSchedule(
   };
 }
 
+function nodeArgumentsXml(filename: string): string {
+  return [process.execPath, ...nodeEntrypointArguments(filename)]
+    .map((argument) => `<string>${xml(argument)}</string>`).join("");
+}
+
+function runtimeEnvironmentXml(): string {
+  const environment: Record<string, string> = {
+    LIVERMORE_WORKSPACE: projectRoot,
+    LIVERMORE_RESOURCE_ROOT: resourceRoot,
+    PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
+  };
+  for (const key of ["LIVERMORE_DESKTOP", "LIVERMORE_WEB_PORT", "LIVERMORE_WEB_UI_URL"]) {
+    if (process.env[key]) environment[key] = process.env[key]!;
+  }
+  return `<key>EnvironmentVariables</key><dict>${Object.entries(environment)
+    .map(([key, value]) => `<key>${key}</key><string>${xml(value)}</string>`).join("")}</dict>`;
+}
+
 function xml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function pad(value: number): string {
   return String(value).padStart(2, "0");
+}
+
+async function migrateLegacySchedules(directory: string, domain: string, legacyWorkspace = projectRoot): Promise<boolean> {
+  let migrated = false;
+  for (const label of ["market-pre", "ai-pre", "market-intraday", "market-close", "ai-close", "portfolio-risk"]) {
+    const filename = path.join(directory, `com.livermore.${label}.plist`);
+    const content = await readFile(filename, "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
+    if (!content) continue;
+    const owner = execFileSync("/usr/bin/plutil", ["-extract", "WorkingDirectory", "raw", "-o", "-", filename], { encoding: "utf8" }).trim();
+    if (owner !== legacyWorkspace) continue;
+    try { execFileSync("launchctl", ["bootout", domain, filename], { stdio: "ignore" }); } catch {}
+    const backup = path.join(projectRoot, "data", "runtime", "legacy-schedules");
+    await mkdir(backup, { recursive: true });
+    await rename(filename, path.join(backup, `${Date.now()}-${path.basename(filename)}`));
+    migrated = true;
+  }
+  return migrated;
 }

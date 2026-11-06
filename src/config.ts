@@ -10,8 +10,6 @@ export interface AppConfig {
   tavilyMcpEnabled: boolean;
   tavilyMcpUrl: string;
   tavilyApiKey: string | undefined;
-  iwencaiBaseUrl: string;
-  iwencaiApiKey: string | undefined;
   futuPythonExecutable: string;
   futuOpenDHost: string;
   futuOpenDPort: number;
@@ -30,6 +28,8 @@ export interface AppConfig {
   feishuWebhookUrl: string | undefined;
   wechatWebhookUrl: string | undefined;
   notifyOnSuccess: boolean;
+  macosNotificationsEnabled: boolean;
+  taskSchedulerEnabled: boolean;
 }
 
 export function loadConfig(env?: NodeJS.ProcessEnv): AppConfig {
@@ -71,14 +71,12 @@ export function loadConfig(env?: NodeJS.ProcessEnv): AppConfig {
 
   return {
     provider: source.PI_PROVIDER?.trim() || "deepseek",
-    model: source.PI_MODEL?.trim() || "deepseek-v4-flash",
+    model: source.PI_MODEL?.trim() || (source.PI_PROVIDER?.trim() === "cursor" ? "auto" : "deepseek-v4-flash"),
     apiBaseUrl: optional(source.PI_BASE_URL),
     timezone: source.APP_TIMEZONE?.trim() || "Asia/Shanghai",
     tavilyMcpEnabled,
     tavilyMcpUrl: source.TAVILY_MCP_URL?.trim() || "https://mcp.tavily.com/mcp/",
     tavilyApiKey: optional(source.TAVILY_API_KEY),
-    iwencaiBaseUrl: source.IWENCAI_BASE_URL?.trim() || "https://openapi.iwencai.com",
-    iwencaiApiKey: optional(source.IWENCAI_API_KEY),
     futuPythonExecutable: source.FUTU_PYTHON?.trim() || "/usr/bin/python3",
     futuOpenDHost: source.FUTU_OPEND_HOST?.trim() || "127.0.0.1",
     futuOpenDPort,
@@ -97,6 +95,8 @@ export function loadConfig(env?: NodeJS.ProcessEnv): AppConfig {
     feishuWebhookUrl: optional(source.FEISHU_WEBHOOK_URL),
     wechatWebhookUrl: optional(source.WECHAT_WEBHOOK_URL),
     notifyOnSuccess: booleanValue(source.NOTIFY_ON_SUCCESS, true, "NOTIFY_ON_SUCCESS"),
+    macosNotificationsEnabled: booleanValue(source.MACOS_NOTIFICATIONS_ENABLED, process.platform === "darwin", "MACOS_NOTIFICATIONS_ENABLED"),
+    taskSchedulerEnabled: booleanValue(source.TASK_SCHEDULER_ENABLED, true, "TASK_SCHEDULER_ENABLED"),
   };
 }
 

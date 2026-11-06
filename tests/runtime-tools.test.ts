@@ -48,7 +48,7 @@ describe("interactive Agent runtime tools", () => {
       await mkdir(skillDirectory);
       await writeFile(path.join(skillDirectory, "SKILL.md"), [
         "---",
-        "name: hithink-market-query",
+        "name: demo-skill",
         "description: Query structured market data.",
         "---",
         "",
@@ -57,7 +57,7 @@ describe("interactive Agent runtime tools", () => {
       const skills = await listSkillDescriptors(true, root);
       expect(skills).toHaveLength(1);
       expect(skills[0]).toMatchObject({
-        name: "hithink-market-query",
+        name: "demo-skill",
         description: "Query structured market data.",
       });
     } finally {
@@ -65,21 +65,7 @@ describe("interactive Agent runtime tools", () => {
     }
   });
 
-  it("exposes the installed Iwencai skill as a constrained market-data tool", async () => {
-    const database = new InvestmentDatabase(":memory:");
-    const tool = createRuntimeTools(loadConfig({ IWENCAI_API_KEY: "" }), database)
-      .find((item) => item.name === "query_iwencai_market");
-    expect(tool).toBeDefined();
-    const result = await tool!.execute("tool-call", { query: "上证指数行情" });
-    expect("isError" in result && result.isError).toBe(true);
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining("IWENCAI_API_KEY"),
-    });
-    database.close();
-  });
-
-  it("separates Futu quotes from A-share-only Iwencai fund flow", async () => {
+  it("separates Futu quotes from A-share-only East Money fund flow", async () => {
     const database = new InvestmentDatabase(":memory:");
     const tools = createRuntimeTools(loadConfig({}), database);
     expect(tools.find((item) => item.name === "query_futu_market")).toBeDefined();

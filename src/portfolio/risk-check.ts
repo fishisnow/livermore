@@ -5,12 +5,12 @@ import type { Context } from "@opentelemetry/api";
 import { createInvestmentAgent } from "../agent/create-investment-agent.js";
 import type { AppConfig } from "../config.js";
 import type { FutuMarketResult } from "../market/futu-client.js";
-import type { IwencaiQueryResult } from "../market/iwencai-client.js";
+import type { EastmoneyFundFlowResult } from "../market/eastmoney-fund-flow.js";
 import {
   findNormalizedQuote,
   isMainlandSecurity,
   type NormalizedMarketQuote,
-} from "../market/iwencai-normalizer.js";
+} from "../market/normalized-market.js";
 import { normalizePortfolioMarketData } from "../market/portfolio-market-normalizer.js";
 import { MessageCenter } from "../notifications/message-center.js";
 import { observeAgent, Telemetry } from "../observability/telemetry.js";
@@ -22,6 +22,7 @@ import {
   type RunUsage,
 } from "../storage/database.js";
 import { createRuntimeTools } from "../tools/runtime-tools.js";
+import { getTaskSettings } from "../tasks/task-settings.js";
 
 type Severity = "normal" | "warning" | "critical";
 
@@ -39,6 +40,7 @@ export interface PortfolioRiskOptions {
   config: AppConfig;
   now?: Date;
   force?: boolean;
+  scheduledSlot?: string;
   database?: InvestmentDatabase;
   telemetry?: Telemetry;
   reportDirectory?: string;
@@ -46,6 +48,7 @@ export interface PortfolioRiskOptions {
 }
 
 export interface PortfolioAgentInput {
+  taskPrompt?: string;
   config: AppConfig;
   database: InvestmentDatabase;
   telemetry: Telemetry;
@@ -58,7 +61,7 @@ export interface PortfolioAgentInput {
 export interface PortfolioAgentResult {
   analysis: string;
   futuResults: FutuMarketResult[];
-  iwencaiFundResults: IwencaiQueryResult[];
+  fundFlowResults: EastmoneyFundFlowResult[];
   usage: RunUsage;
   skillReadCount: number;
   futuQueryCount: number;
@@ -92,6 +95,8 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
   if (Number.isNaN(now.getTime())) throw new Error("Invalid portfolio risk-check time.");
   const database = options.database ?? new InvestmentDatabase(databasePath);
   const ownsDatabase = !options.database;
+  const settings = getTaskSettings(database, "portfolio-risk-check", options.config.timezone);
+  options = { ...options, config: { ...options.config, timezone: settings.timezone } };
   const telemetry = options.telemetry ?? Telemetry.create(options.config);
   const ownsTelemetry = !options.telemetry;
   const messageCenter = new MessageCenter(options.config, database);
@@ -102,7 +107,7 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
     task: "portfolio-risk-check",
     mode: "hourly",
     scheduledAt: now.toISOString(),
-    idempotencyKey: `portfolio-risk-check:${localDate}:${slot}`,
+    idempotencyKey: options.scheduledSlot ?? `portfolio-risk-check:${localDate}:${slot}`,
     ...(options.force === undefined ? {} : { force: options.force }),
   });
   let locked = false;
@@ -114,6 +119,7 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
       "openinference.span.kind": "CHAIN",
       "livermore.run.id": runId,
       "livermore.task": "portfolio-risk-check",
+      "livermore.task.config_revision": settings.revision,
     }, async (rootSpan) => {
       const spanContext = rootSpan.spanContext();
       const traceId = spanContext.traceId !== "00000000000000000000000000000000"
@@ -127,7 +133,7 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
         ? {
           analysis: "当前没有持仓，本轮未调用行情 Skill 或模型。",
           futuResults: [],
-          iwencaiFundResults: [],
+          fundFlowResults: [],
           usage: zeroUsage(options.config.modelCostCurrency),
           skillReadCount: 0,
           futuQueryCount: 0,
@@ -147,12 +153,13 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
             positions,
             localDate,
             localTime,
+            taskPrompt: settings.prompt,
           });
           span.setAttributes({
             "livermore.skill.read_count": result.skillReadCount,
             "livermore.futu.query_count": result.futuQueryCount,
             "livermore.futu.news_query_count": result.newsQueryCount,
-            "livermore.iwencai.fund_flow_query_count": result.fundFlowQueryCount,
+            "livermore.eastmoney.fund_flow_query_count": result.fundFlowQueryCount,
             "gen_ai.usage.input_tokens": result.usage.inputTokens,
             "gen_ai.usage.output_tokens": result.usage.outputTokens,
             ...(result.usage.costCurrency === "USD"
@@ -169,25 +176,23 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
         });
       const rawFutuRowCount = agentResult.futuResults
         .reduce((count, result) => count + result.rows.length, 0);
-      const rawIwencaiRowCount = agentResult.iwencaiFundResults
-        .reduce((count, result) => count + (result.datas?.length ?? 0), 0);
+      const rawFundFlowRowCount = agentResult.fundFlowResults
+        .reduce((count, result) => count + result.rows.length, 0);
       const marketQuotes = await telemetry.withSpan("market.normalize", {
         "openinference.span.kind": "CHAIN",
         "livermore.futu.raw_row_count": rawFutuRowCount,
-        "livermore.iwencai.fund_flow_raw_row_count": rawIwencaiRowCount,
+        "livermore.eastmoney.fund_flow_raw_row_count": rawFundFlowRowCount,
       }, async (span) => {
         const normalized = normalizePortfolioMarketData(
           agentResult.futuResults,
-          agentResult.iwencaiFundResults,
+          agentResult.fundFlowResults,
         );
         span.setAttribute("livermore.market.normalized_quote_count", normalized.length);
         return normalized;
       });
       rootSpan.setAttribute("livermore.market.normalized_quote_count", marketQuotes.length);
-      const iwencaiQuotaExceeded = agentResult.iwencaiFundResults.some(
-        (result) => result.unavailable_reason === "quota_exceeded",
-      );
-      rootSpan.setAttribute("livermore.iwencai.quota_exceeded", iwencaiQuotaExceeded);
+      const fundFlowUnavailable = agentResult.fundFlowResults.some((result) => !result.success);
+      rootSpan.setAttribute("livermore.eastmoney.fund_flow_unavailable", fundFlowUnavailable);
       const assessed: AssessedPosition[] = [];
       for (const position of positions) {
         assessed.push(await telemetry.withSpan("portfolio.position_check", {
@@ -229,7 +234,7 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
         localTime,
         assessed,
         agentResult.analysis,
-        iwencaiQuotaExceeded,
+        fundFlowUnavailable,
       );
       const reportPath = await persistReport(
         runId,
@@ -259,7 +264,7 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
               now,
               options.config.timezone,
               agentResult.analysis,
-              iwencaiQuotaExceeded,
+              fundFlowUnavailable,
             ),
           });
         });
@@ -352,7 +357,7 @@ function assessPosition(
 
 async function runPortfolioAgent(input: PortfolioAgentInput): Promise<PortfolioAgentResult> {
   const futuResults: FutuMarketResult[] = [];
-  const iwencaiFundResults: IwencaiQueryResult[] = [];
+  const fundFlowResults: EastmoneyFundFlowResult[] = [];
   const skillsRead = new Set<string>();
   let futuQueryCount = 0;
   let newsQueryCount = 0;
@@ -362,11 +367,11 @@ async function runPortfolioAgent(input: PortfolioAgentInput): Promise<PortfolioA
     .filter(isMainlandSecurity);
   const tools = createRuntimeTools(input.config, input.database, {
     onSkillRead(name) {
-      if (name === "futuapi" || name === "hithink-market-query") skillsRead.add(name);
+      if (name === "futuapi") skillsRead.add(name);
     },
-    onIwencaiResult(_query, result) {
+    onFundFlowResult(_symbols, result) {
       fundFlowQueryCount += 1;
-      iwencaiFundResults.push(result as IwencaiQueryResult);
+      fundFlowResults.push(result as EastmoneyFundFlowResult);
     },
     onFutuResult(_symbols, result) {
       futuQueryCount += 1;
@@ -394,23 +399,7 @@ async function runPortfolioAgent(input: PortfolioAgentInput): Promise<PortfolioA
   const agent = await createInvestmentAgent(input.config, {
     tools,
     includeReportTool: false,
-    systemPromptAppend: `你是 Livermore 的持仓风险巡检 Agent。这个任务必须由你驱动已安装 Skill 完成。
-
-必须遵循：
-1. 首先调用 read_skill 阅读 futuapi，然后调用 query_futu_market 查询本次全部持仓的最新价、当日涨跌、RSI 和 MACD。
-2. 获得行情中的证券简称后，调用 query_futu_news 查询持仓标的的最新新闻、公告或评级。每个标的最多保留 3 条，优先使用发布时间最近且与持仓直接相关的消息；没有结果时明确写“未检索到近期消息”，不得编造。
-3. 只有存在沪深京持仓时，才读取 hithink-market-query，并调用 query_a_share_main_fund_flow。该工具只能查询 A 股主力净流入，禁止用它查询价格、涨跌、RSI 或 MACD。
-4. 港股不存在本任务定义的“主力净流入”技术指标。禁止把任何港股代码传给 query_a_share_main_fund_flow，禁止在港股分析或表格中要求、展示或推断主力净流入。
-5. 如果问财返回 unavailable_reason=quota_exceeded，A 股主力净流入标记为暂不可用并继续完成巡检；不得重试、不得用网页或其他字段替代。
-6. 不得用网页搜索替代结构化行情与资讯 Skill，不得编造或跨数据源填补缺失值。
-7. 本地持仓的 costBasis 全部是用户维护的复权后单位成本，可直接与 Futu 最新价比较。不得质疑成本是否复权，不得要求用户确认除权、送转、拆股或重新计算复权成本。
-8. 最终报告开头必须先输出“## 飞书风险摘要”章节，且该章节不超过 1,200 个中文字符。章节内依次包含：
-   - “### 简明总结”：用 2-4 句话概括组合风险，并纳入最多 3 条对持仓最重要的最新消息，注明标的、发布时间和来源；明确区分消息事实与影响推断。
-   - “### 风险优先级”：使用 Markdown 表格，列固定为“优先级｜代码｜标的｜操作建议｜核心风险”。覆盖全部持仓并按 P0、P1、P2 排序；操作建议只能是买入、持有或卖出。
-9. 在飞书摘要之后输出完整分析，逐只区分事实、推断和待验证项。每只持仓必须给出且只能给出一个明确操作建议：“买入”“持有”或“卖出”；其中买入表示新建或加仓，持有表示维持当前仓位，卖出表示减仓或退出。不得用“观望”“关注”“等待确认”等词替代三选一结论。
-10. 每项操作建议必须同时说明：核心理由、执行条件或参考区间、建议失效条件。数据不足时仍需基于已有持仓风险给出最保守的三选一建议，并明确数据缺口。
-11. 注明“行情、技术指标与标的资讯：Futu OpenAPI；A股主力资金：同花顺问财（额度不足时暂缺）；港股不适用主力净流入”。
-12. 你只提供辅助研判，不决定报警等级，不执行交易。最终风险阈值由确定性代码复核，用户自行决定是否采纳建议。`,
+    systemPromptAppend: input.taskPrompt ?? getTaskSettings(input.database, "portfolio-risk-check", input.config.timezone).prompt,
   });
   const prompt = buildAgentPrompt(input.positions, input.localDate, input.localTime, input.config.timezone);
   const observation = observeAgent(agent, input.telemetry, input.parentContext);
@@ -424,14 +413,14 @@ async function runPortfolioAgent(input: PortfolioAgentInput): Promise<PortfolioA
   if (!skillsRead.has("futuapi")) throw new Error("Portfolio Agent did not read futuapi before analysis.");
   if (futuQueryCount === 0) throw new Error("Portfolio Agent did not call query_futu_market.");
   if (newsQueryCount === 0) throw new Error("Portfolio Agent did not call query_futu_news.");
-  if (mainlandSymbols.length > 0 && (!skillsRead.has("hithink-market-query") || fundFlowQueryCount === 0)) {
+  if (mainlandSymbols.length > 0 && fundFlowQueryCount === 0) {
     console.warn("A-share main fund-flow query was skipped; continuing the risk check without this optional field.");
   }
   if (!analysis.trim()) throw new Error("Portfolio Agent returned an empty risk analysis.");
   return {
     analysis: analysis.trim(),
     futuResults,
-    iwencaiFundResults,
+    fundFlowResults,
     usage: observation.usage,
     skillReadCount: skillsRead.size,
     futuQueryCount,
@@ -483,8 +472,8 @@ ${JSON.stringify(positions.map((position) => ({
 必须先读取 futuapi Skill，再通过 query_futu_market 获取全部标的的行情和技术指标。
 取得证券简称后，必须调用 query_futu_news 查询全部持仓的最新新闻、公告或评级，并将最重要的消息纳入飞书风险摘要。
 ${mainlandSymbols.length > 0
-    ? `A 股持仓：${mainlandSymbols.join("、")}。仅针对这些代码读取 hithink-market-query，并调用 query_a_share_main_fund_flow 获取主力净流入。`
-    : "本次没有 A 股持仓，不得读取或调用同花顺问财。"}
+    ? `A 股持仓：${mainlandSymbols.join("、")}。仅针对这些代码调用 query_a_share_main_fund_flow，从东方财富数据中心获取主力净流入及超大单/大单/中单/小单明细。`
+    : "本次没有 A 股持仓，不得调用东方财富资金流向查询。"}
 港股不适用“主力净流入”指标：不得查询、展示或推断港股主力净流入。
 
 输出要求：
@@ -559,7 +548,7 @@ function buildReport(
   time: string,
   items: AssessedPosition[],
   agentAnalysis: string,
-  iwencaiQuotaExceeded: boolean,
+  fundFlowUnavailable: boolean,
 ): string {
   const rows = items.map((item) => [
     item.position.symbol,
@@ -579,7 +568,7 @@ function buildReport(
 
 检查时间：${date} ${time.slice(0, 2)}:${time.slice(2)}
 
-数据来源：最新价、当日涨跌、RSI、MACD 来自 Futu OpenAPI；A 股主力净流入来自同花顺问财${iwencaiQuotaExceeded ? "（本次额度已用完，主力资金字段暂缺）" : ""}。行情可能存在延迟，请以交易所及券商数据为准。
+数据来源：最新价、当日涨跌、RSI、MACD 来自 Futu OpenAPI；A 股主力净流入来自东方财富数据中心（data.eastmoney.com 资金流向）${fundFlowUnavailable ? "（本次查询失败，主力资金字段暂缺）" : ""}。行情可能存在延迟，请以交易所及券商数据为准。
 
 ## Agent 辅助研判
 
@@ -599,7 +588,7 @@ function buildAlertBody(
   now: Date,
   timezone: string,
   agentAnalysis: string,
-  iwencaiQuotaExceeded: boolean,
+  fundFlowUnavailable: boolean,
 ): string {
   const checkedAt = new Intl.DateTimeFormat("zh-CN", {
     timeZone: timezone, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
@@ -608,7 +597,7 @@ function buildAlertBody(
   return [
     `检查时间：${checkedAt}`,
     summary,
-    `数据：行情/技术指标/资讯来自 Futu OpenAPI；A股主力资金来自同花顺问财${iwencaiQuotaExceeded ? "（本次额度已用完，暂缺）" : ""}；港股不适用主力净流入。`,
+    `数据：行情/技术指标/资讯来自 Futu OpenAPI；A股主力资金来自东方财富数据中心${fundFlowUnavailable ? "（本次查询失败，暂缺）" : ""}；港股不适用主力净流入。`,
     "以上内容仅供研究参考，不构成投资建议。",
   ].join("\n");
 }
