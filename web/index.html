@@ -36,7 +36,7 @@
       <nav class="sidebar-nav">
         <button class="nav-item selected" data-view-target="chat" type="button" aria-current="page" title="研究对话"><svg class="icon"><use href="#i-chat"/></svg><span>研究对话</span></button>
         <button class="nav-item" data-view-target="portfolio" type="button" title="我的持仓"><svg class="icon"><use href="#i-chart"/></svg><span>我的持仓</span><span class="nav-count" id="nav-position-count">—</span></button>
-        <button class="nav-item" data-view-target="tasks" type="button" title="任务与记录"><svg class="icon"><use href="#i-tasks"/></svg><span>任务与记录</span><span class="nav-count" id="nav-task-count">3</span></button>
+        <button class="nav-item" data-view-target="tasks" type="button" title="定时任务"><svg class="icon"><use href="#i-tasks"/></svg><span>定时任务</span><span class="nav-count" id="nav-task-count">3</span></button>
         <button class="nav-item" data-view-target="capabilities" type="button" title="研究能力"><svg class="icon"><use href="#i-grid"/></svg><span>研究能力</span></button>
       </nav>
       <section class="chat-history" aria-label="历史会话"><div class="section-label"><span>历史会话</span><button id="refresh-chats" type="button" aria-label="刷新历史会话">↻</button></div><div id="chat-history-list"></div><button id="more-chats" type="button" hidden>加载更早会话</button></section>
@@ -106,7 +106,7 @@
         <p class="inbox-footnote">最近 30 条 · 完整分析保存在任务记录中</p>
       </aside>
 
-      <section class="tasks-page" aria-label="任务与记录">
+      <section class="tasks-page" aria-label="定时任务">
         <div class="rail-head">
           <div>
             <p class="eyebrow">自动化</p>
@@ -119,8 +119,8 @@
 
         <section class="rail-section">
           <div class="section-label">
-            <span>最近运行</span>
-            <button id="view-all-runs" type="button">查看全部</button>
+            <span id="recent-runs-label">最近运行</span>
+            <button id="view-all-runs" type="button" hidden>查看全部</button>
           </div>
           <div id="recent-runs" class="run-list"></div>
         </section>

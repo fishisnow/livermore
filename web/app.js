@@ -7,6 +7,7 @@ const state = {
   taskConfig: null,
   taskConfigDirty: false,
   notificationRunId: null,
+  selectedTask: null,
   chats: [],
   switchingChat: false,
 };
@@ -90,7 +91,7 @@ document.querySelector("#native-settings").addEventListener("click", () => nativ
 const views = {
   chat: ["研究对话", "与你的本地投资 Agent 一起研究"],
   portfolio: ["我的持仓", "持仓维护 · 风险监测 · 操作建议"],
-  tasks: ["任务与记录", "自动研究计划与最近运行记录"],
+  tasks: ["定时任务", "选择任务后，只显示该任务的运行记录"],
   capabilities: ["研究能力", "已安装的 Skills、MCP 与数据连接"],
 };
 // Reuse the existing functional panels without modal nesting or duplicate controls.
@@ -184,7 +185,8 @@ elements.taskConfigDialog.addEventListener("cancel", (event) => { event.preventD
 document.querySelector("#add-task-time").addEventListener("click", () => { appendTaskTime("09:00", state.taskConfig?.modes[0]); state.taskConfigDirty = true; });
 document.querySelector("#reset-task-prompt").addEventListener("click", () => { if (state.taskConfig && confirm("恢复默认 Prompt？当前未保存的 Prompt 将被替换。")) { document.querySelector("#task-prompt").value = state.taskConfig.defaultPrompt; state.taskConfigDirty = true; } });
 document.querySelector("#view-all-runs").addEventListener("click", () => {
-  setView("tasks");
+  state.selectedTask = null;
+  if (state.dashboard) renderDashboard(state.dashboard);
 });
 document.querySelector("#close-dialog").addEventListener("click", () => elements.dialog.close());
 document.querySelector("#portfolio-open").addEventListener("click", openPortfolio);
@@ -221,15 +223,20 @@ async function loadDashboard() {
 }
 
 function renderDashboard(data) {
+  if (state.selectedTask && !data.tasks.some((task) => task.task === state.selectedTask)) state.selectedTask = null;
+  const selectedTask = data.tasks.find((task) => task.task === state.selectedTask) ?? null;
   document.querySelector("#nav-task-count").textContent = String(data.tasks.length);
+  document.querySelector("#recent-runs-label").textContent = selectedTask ? `最近运行 · ${selectedTask.title}` : "最近运行";
+  document.querySelector("#view-all-runs").hidden = !selectedTask;
   elements.traceLink.href = data.agent.phoenixUrl;
   elements.tasks.innerHTML = data.tasks.map((task) => {
     const run = task.running || task.latest;
     const status = run?.status || "idle";
+    const selected = task.task === state.selectedTask;
     return `
-      <article class="task-card ${escapeHtml(status)}">
+      <article class="task-card ${escapeHtml(status)} ${selected ? "selected" : ""}" data-select-task="${escapeHtml(task.task)}">
         <div class="task-title-row">
-          <button class="task-title-button" data-edit-task="${escapeHtml(task.task)}" type="button">${escapeHtml(task.title)}</button>
+          <button class="task-title-button" type="button">${escapeHtml(task.title)}</button>
           <span class="task-status ${escapeHtml(status)}">${statusLabel(status)}</span>
         </div>
         <p class="task-schedule">${escapeHtml(task.schedule)}</p>
@@ -245,12 +252,23 @@ function renderDashboard(data) {
       </article>`;
   }).join("");
 
+  elements.tasks.querySelectorAll("[data-select-task]").forEach((card) => {
+    card.addEventListener("click", (event) => {
+      const button = event.target.closest("button");
+      if (button && !button.classList.contains("task-title-button")) return;
+      state.selectedTask = card.dataset.selectTask;
+      renderDashboard(data);
+    });
+  });
   elements.tasks.querySelectorAll("[data-run-task]").forEach((button) => {
     button.addEventListener("click", () => runTask(button.dataset.runTask, button));
   });
   elements.tasks.querySelectorAll("[data-edit-task]").forEach((button) => button.addEventListener("click", () => openTaskConfig(button.dataset.editTask)));
 
-  elements.recentRuns.innerHTML = data.recentRuns.length ? data.recentRuns.map((run) => `
+  const visibleRuns = selectedTask
+    ? (selectedTask.runs ?? data.recentRuns.filter((run) => run.task === selectedTask.task))
+    : data.recentRuns;
+  elements.recentRuns.innerHTML = visibleRuns.length ? visibleRuns.map((run) => `
     <button class="run-row" type="button" data-run-id="${escapeHtml(run.id)}">
       <span class="run-state ${escapeHtml(run.status)}"></span>
       <span class="run-name">
@@ -259,7 +277,7 @@ function renderDashboard(data) {
       </span>
       <span class="run-duration">${run.durationMs == null ? "…" : formatDuration(run.durationMs)}</span>
     </button>
-  `).join("") : `<p class="task-schedule">任务运行后会出现在这里。</p>`;
+  `).join("") : `<p class="task-schedule">${selectedTask ? "这条任务还没有运行记录。" : "任务运行后会出现在这里。"}</p>`;
 
   elements.recentRuns.querySelectorAll("[data-run-id]").forEach((button) => {
     button.addEventListener("click", () => openRun(button.dataset.runId));

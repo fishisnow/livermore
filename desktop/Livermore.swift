@@ -147,7 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let editItem = NSMenuItem(); editItem.submenu = edit; menu.addItem(editItem)
 
         let view = NSMenu(title: "显示")
-        for (index, title) in ["研究对话", "我的持仓", "任务与记录", "研究能力"].enumerated() {
+        for (index, title) in ["研究对话", "我的持仓", "定时任务", "研究能力"].enumerated() {
             let item = view.addItem(withTitle: title, action: #selector(navigateWorkspace(_:)), keyEquivalent: String(index + 1))
             item.tag = index; item.target = self
         }

@@ -69,18 +69,14 @@ async function resolveModels(config: AppConfig) {
   if (!config.apiBaseUrl) return models;
 
   const baseUrl = normalizeOpenAiBaseUrl(config.apiBaseUrl);
+  const apiKeyEnvNames = providerApiKeyEnvNames(config.provider);
   const customModel = createOpenAiCompatibleModel(config, baseUrl);
   models.setProvider(createProvider({
     id: config.provider,
     name: config.provider,
     baseUrl,
     auth: {
-      apiKey: envApiKeyAuth("Pi API key", [
-        "PI_API_KEY",
-        `${config.provider.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`,
-        "OPENAI_API_KEY",
-        "DEEPSEEK_API_KEY",
-      ]),
+      apiKey: envApiKeyAuth("Pi API key", apiKeyEnvNames),
     },
     models: [customModel],
     api: openAICompletionsApi(),
@@ -106,8 +102,10 @@ function createOpenAiCompatibleModel(config: AppConfig, baseUrl: string): Model<
       cacheRead: 0,
       cacheWrite: 0,
     },
-    contextWindow: 128000,
-    maxTokens: 16384,
+    // Pi only clamps a request to the remaining context when contextWindow is positive.
+    // NaN maxTokens is omitted from the provider request, so the endpoint keeps its own output default.
+    contextWindow: 0,
+    maxTokens: Number.NaN,
     ...(isQwen
       ? {
           compat: {
@@ -127,4 +125,13 @@ function createOpenAiCompatibleModel(config: AppConfig, baseUrl: string): Model<
 
 function normalizeOpenAiBaseUrl(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function providerApiKeyEnvNames(provider: string): string[] {
+  return [
+    "PI_API_KEY",
+    `${provider.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`,
+    "OPENAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+  ];
 }

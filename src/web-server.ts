@@ -93,7 +93,8 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
         const taskRuns = database.listRuns(30, task);
         return { task, title: titleForTask(database, task), custom: !isBuiltinTaskName(task), schedule: scheduleDescription(settings), enabled: settings.enabled,
           latest: taskRuns[0] ?? null,
-          running: taskRuns.find((run) => run.status === "running") ?? null };
+          running: taskRuns.find((run) => run.status === "running") ?? null,
+          runs: taskRuns.slice(0, 12) };
       }),
       recentRuns: runs.slice(0, 12),
     });

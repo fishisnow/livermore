@@ -663,7 +663,8 @@ body[data-connection="error"] .system-line>.live-dot {
   padding:13px 13px 11px;
   background:var(--canvas);
   border:1px solid var(--soft-line);
-  border-radius:9px
+  border-radius:9px;
+  cursor:pointer
 }
 .task-card.running {
   border-color:var(--accent)
@@ -906,6 +907,11 @@ body[data-view="tasks"] .task-card {
   background:var(--surface);
   padding:18px
 }
+body[data-view="tasks"] .task-card.selected {
+  border-color:var(--accent);
+  background:var(--accent-soft);
+  box-shadow:inset 0 0 0 1px var(--accent)
+}
 body[data-view="tasks"] .task-title-row strong {
   font-size:13px
 }
@@ -919,7 +925,7 @@ body[data-view="tasks"] .run-name small {
   display:inline-block;
   margin-left:16px
 }
-body[data-view="tasks"] #view-all-runs,body[data-view="tasks"] .capability-section {
+body[data-view="tasks"] .capability-section {
   display:none
 }
 /* Shared report sheet and full-size workspace panels use the same theme. */
