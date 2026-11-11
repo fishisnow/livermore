@@ -62,6 +62,8 @@ export class Telemetry {
         "deployment.environment.name": process.env.NODE_ENV ?? "local",
         "openinference.project.name": "livermore",
       }),
+      // The SDK default of 128 attributes drops message cards once a turn fans out into many tool results.
+      spanLimits: { attributeCountLimit: Number.POSITIVE_INFINITY },
       spanProcessors: [new BatchSpanProcessor(exporter, { scheduledDelayMillis: 500, exportTimeoutMillis: 5_000 })],
     });
     provider.register();
@@ -162,7 +164,7 @@ export function observeAgent(
           "llm.provider": event.message.provider,
           "llm.system": event.message.provider,
           "llm.model_name": event.message.model,
-          ...(telemetry.captureContent ? traceInput(serializeAgentContext(agent)) : {}),
+          ...(telemetry.captureContent ? llmInputAttributes(agent) : {}),
         },
       }, turnContext);
     } else if (event.type === "message_end" && event.message.role === "assistant") {
@@ -229,7 +231,7 @@ export function observeAgent(
       "llm.token_count.prompt": usage.input,
       "llm.token_count.completion": usage.output,
       "llm.token_count.total": usage.totalTokens,
-      ...(telemetry.captureContent ? traceOutput(serializeMessage(message)) : {}),
+      ...(telemetry.captureContent ? llmOutputAttributes(message) : {}),
     });
     if (message.errorMessage) {
       modelSpan.setStatus({ code: SpanStatusCode.ERROR, message: message.errorMessage });
@@ -240,6 +242,120 @@ export function observeAgent(
     modelSpan.end();
     modelSpan = undefined;
   }
+}
+
+function llmInputAttributes(agent: Agent): Attributes {
+  return {
+    ...flattenMessages("llm.input_messages", inputMessagesForTrace(agent)),
+    ...flattenTools(agent.state.tools),
+  };
+}
+
+function llmOutputAttributes(message: AssistantMessage): Attributes {
+  const traced = toTraceMessage(message);
+  return traced ? flattenMessages("llm.output_messages", [traced]) : {};
+}
+
+function inputMessagesForTrace(agent: Agent): TraceMessage[] {
+  const messages = agent.state.messages.flatMap((message) => {
+    const traced = toTraceMessage(message);
+    return traced ? [traced] : [];
+  });
+  const prompt = agent.state.systemPrompt.trim();
+  if (prompt && !messages.some((message) => message.role === "system")) {
+    messages.unshift({ role: "system", content: prompt });
+  }
+  return messages;
+}
+
+function flattenMessages(prefix: string, messages: TraceMessage[]): Attributes {
+  const attributes: Attributes = {};
+  messages.forEach((message, index) => {
+    const base = `${prefix}.${index}.message`;
+    attributes[`${base}.role`] = message.role;
+    attributes[`${base}.content`] = truncate(message.content);
+    if (message.name) attributes[`${base}.name`] = message.name;
+    if (message.toolCallId) attributes[`${base}.tool_call_id`] = message.toolCallId;
+    message.toolCalls?.forEach((call, callIndex) => {
+      const callBase = `${base}.tool_calls.${callIndex}.tool_call`;
+      attributes[`${callBase}.id`] = call.id;
+      attributes[`${callBase}.function.name`] = call.name;
+      attributes[`${callBase}.function.arguments`] = truncate(call.arguments);
+    });
+  });
+  return attributes;
+}
+
+function flattenTools(tools: Agent["state"]["tools"]): Attributes {
+  const attributes: Attributes = {};
+  tools.forEach((tool, index) => {
+    attributes[`llm.tools.${index}.tool.json_schema`] = safeJson({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    });
+  });
+  return attributes;
+}
+
+interface TraceMessage {
+  role: string;
+  content: string;
+  name?: string;
+  toolCallId?: string;
+  toolCalls?: { id: string; name: string; arguments: string }[];
+}
+
+function toTraceMessage(message: unknown): TraceMessage | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  const value = message as Record<string, unknown>;
+  if (typeof value.role !== "string") return undefined;
+  const toolCalls = value.role === "assistant" ? toolCallsFromContent(value.content) : [];
+  return {
+    role: value.role === "toolResult" ? "tool" : value.role,
+    content: messageContent(value),
+    ...(typeof value.toolName === "string" ? { name: value.toolName } : {}),
+    ...(typeof value.toolCallId === "string" ? { toolCallId: value.toolCallId } : {}),
+    ...(toolCalls.length > 0 ? { toolCalls } : {}),
+  };
+}
+
+function messageContent(value: Record<string, unknown>): string {
+  const text = contentText(value.content);
+  const sections = value.sections;
+  if (!sections || typeof sections !== "object" || Array.isArray(sections)) return text;
+  const extra = Object.entries(sections).flatMap(([name, section]) => (
+    typeof section === "string" ? [`[${name}]\n${section}`] : []
+  ));
+  return [text, ...extra].filter((part) => part.length > 0).join("\n\n");
+}
+
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  let sawThinking = false;
+  for (const item of content) {
+    if (!item || typeof item !== "object") continue;
+    const block = item as Record<string, unknown>;
+    if (block.type === "text" && typeof block.text === "string") parts.push(block.text);
+    else if (block.type === "image") parts.push("[image]");
+    else if (block.type === "thinking") sawThinking = true;
+  }
+  if (parts.length === 0 && sawThinking) return "[thinking redacted]";
+  return parts.join("\n");
+}
+
+function toolCallsFromContent(content: unknown): NonNullable<TraceMessage["toolCalls"]> {
+  if (!Array.isArray(content)) return [];
+  const calls: NonNullable<TraceMessage["toolCalls"]> = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") continue;
+    const block = item as Record<string, unknown>;
+    if (block.type !== "toolCall" || typeof block.id !== "string" || typeof block.name !== "string") continue;
+    calls.push({ id: block.id, name: block.name, arguments: safeJson(block.arguments ?? {}) });
+  }
+  return calls;
 }
 
 function traceInput(value: string): Attributes {
