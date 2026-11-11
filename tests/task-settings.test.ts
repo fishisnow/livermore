@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { InvestmentDatabase } from "../src/storage/database.js";
 import { defaultTaskSettings, getTaskSettings, renderBriefingPrompt, saveTaskSettings, validateTaskSettings } from "../src/tasks/task-settings.js";
 import { taskDefinitions } from "../src/briefings/task-definitions.js";
-import { dispatchDueTasks } from "../src/tasks/scheduler.js";
+import { dispatchDueTasks, nextSchedulerTick } from "../src/tasks/scheduler.js";
 import { createCustomResearchTask, listTaskNames } from "../src/tasks/task-settings.js";
 
 describe("configurable research tasks", () => {
@@ -71,9 +71,37 @@ describe("configurable research tasks", () => {
     await dispatchDueTasks(db, { now: new Date("2026-11-07T03:00:00Z"), launch });
     await dispatchDueTasks(db, { now: new Date("2026-11-06T03:10:00Z"), launch });
     expect(launch).not.toHaveBeenCalled();
-    await expect(dispatchDueTasks(db, { now: new Date("2026-11-06T03:01:00Z"), launch: async () => { throw new Error("spawn failed"); } })).rejects.toThrow("spawn failed");
+    await dispatchDueTasks(db, { now: new Date("2026-11-06T03:01:00Z"), launch: async () => { throw new Error("spawn failed"); } });
     await dispatchDueTasks(db, { now: new Date("2026-11-06T03:02:00Z"), launch });
     expect(launch).toHaveBeenCalledTimes(1);
+    db.close();
+  });
+
+  it("keeps dispatching later tasks when one launch fails", async () => {
+    const db = new InvestmentDatabase(":memory:");
+    const market = defaultTaskSettings("market-briefing");
+    const ai = defaultTaskSettings("ai-industry-chain");
+    saveTaskSettings(db, market.task, { ...market, times: [{ time: "11:00", mode: "intraday" }] });
+    saveTaskSettings(db, ai.task, { ...ai, times: [{ time: "11:00", mode: "pre-market" }] });
+    const launch = vi.fn(async (invocation: { task: string }) => { if (invocation.task === "market-briefing") throw new Error("spawn failed"); });
+    await dispatchDueTasks(db, { now: new Date("2026-11-06T03:00:00Z"), launch });
+    expect(launch.mock.calls.map((call) => call[0].task)).toEqual(["market-briefing", "ai-industry-chain", "portfolio-risk-check"]);
+    db.close();
+  });
+
+  it("catches up only the latest missed slot after the scheduler has stayed awake", async () => {
+    const db = new InvestmentDatabase(":memory:");
+    const launch = vi.fn(async () => {});
+    await dispatchDueTasks(db, { now: new Date("2026-11-06T07:00:00Z"), launch });
+    expect(launch).not.toHaveBeenCalled();
+    await dispatchDueTasks(db, { now: new Date("2026-11-06T07:00:00Z"), catchUp: true, launch });
+    expect(launch).toHaveBeenCalledExactlyOnceWith({ task: "portfolio-risk-check", mode: "hourly", slot: "portfolio-risk-check:2026-11-06:14:30" });
+    const first = nextSchedulerTick(undefined, 0);
+    const reset = nextSchedulerTick(first, 10 * 60_000);
+    const second = nextSchedulerTick(reset, 10 * 60_000 + 30_000);
+    const third = nextSchedulerTick(second, 10 * 60_000 + 60_000);
+    expect(reset.catchUp).toBe(false);
+    expect(third.catchUp).toBe(true);
     db.close();
   });
 });
