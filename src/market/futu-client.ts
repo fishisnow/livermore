@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { AppConfig } from "../config.js";
 import { projectSkillsDirectory } from "../project-paths.js";
+import { ATR_DAILY_BAR_COUNT, atrStopFromDailyBars } from "./atr.js";
 import {
   normalizeSecurityCode,
   toFutuSecurityCode,
@@ -51,6 +52,8 @@ interface FutuSnapshotRow {
 
 interface FutuKlineRow {
   time?: string;
+  high?: number;
+  low?: number;
   close?: number;
   [key: string]: unknown;
 }
@@ -71,6 +74,8 @@ export interface FutuMarketRow {
   dayChangePct?: number;
   rsi?: number;
   macd?: number;
+  atr?: number;
+  atrStopLoss?: number;
   asOf?: string;
   error?: string;
   raw: {
@@ -157,6 +162,7 @@ export async function queryFutuMarket(
     }
     const lastKline = klines.at(-1);
     const currentPrice = positiveNumber(snapshot?.last_price) ?? positiveNumber(lastKline?.close);
+    const atrStop = currentPrice === undefined ? null : atrStopFromDailyBars(klines, currentPrice);
     const previousClose = positiveNumber(snapshot?.prev_close) ?? positiveNumber(klines.at(-2)?.close);
     rows.push({
       requestedSymbol: item.requestedSymbol,
@@ -169,6 +175,7 @@ export async function queryFutuMarket(
         : { dayChangePct: round(((currentPrice - previousClose) / previousClose) * 100) }),
       ...(rsi === undefined ? {} : { rsi }),
       ...(macd === undefined ? {} : { macd }),
+      ...(atrStop ? { atr: round(atrStop.atr), atrStopLoss: round(atrStop.stopLoss) } : {}),
       ...(text(lastKline?.time) ? { asOf: text(lastKline?.time)! } : {}),
       ...(klineError ? { error: `日 K 线/技术指标不可用：${klineError}` } : {}),
       raw: {
@@ -224,6 +231,8 @@ export function normalizeFutuResult(result: FutuMarketResult): NormalizedMarketQ
     ...(row.dayChangePct === undefined ? {} : { dayChangePct: row.dayChangePct }),
     ...(row.rsi === undefined ? {} : { rsi: row.rsi }),
     ...(row.macd === undefined ? {} : { macd: row.macd }),
+    ...(row.atr === undefined ? {} : { atr: row.atr }),
+    ...(row.atrStopLoss === undefined ? {} : { atrStopLoss: row.atrStopLoss }),
     evidence: [{
       source: "futuapi",
       row: {
@@ -314,7 +323,7 @@ async function readDailyKlines(config: AppConfig, code: string): Promise<FutuKli
   const output = await runFutuScript(
     config,
     futuKlineScriptPath,
-    [code, "--ktype", "1d", "--num", "80", "--rehab", "forward", "--json"],
+    [code, "--ktype", "1d", "--num", String(ATR_DAILY_BAR_COUNT), "--rehab", "forward", "--json"],
     35_000,
   );
   const parsed = parseJson<{ data?: FutuKlineRow[] }>(output, `Futu K-line ${code}`);

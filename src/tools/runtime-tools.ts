@@ -16,8 +16,6 @@ import { queryEastmoneyMainFundFlow } from "../market/eastmoney-fund-flow.js";
 import { isMainlandSecurity, normalizeSecurityCode } from "../market/normalized-market.js";
 import { projectRoot, projectSkillsDirectory, reportsDirectory } from "../project-paths.js";
 import type { InvestmentDatabase } from "../storage/database.js";
-import { collectLiveSources } from "../briefings/source-provider.js";
-import type { BriefingTaskDefinition } from "../briefings/types.js";
 
 export interface SkillDescriptor {
   name: string;
@@ -48,10 +46,6 @@ const listRunsParameters = Type.Object({
 const getRunParameters = Type.Object({
   runId: Type.String({ minLength: 4, description: "Full run ID or a unique leading prefix." }),
   includeReport: Type.Optional(Type.Boolean()),
-});
-
-const searchParameters = Type.Object({
-  query: Type.String({ minLength: 2, maxLength: 300 }),
 });
 
 const skillParameters = Type.Object({
@@ -113,39 +107,6 @@ export function createRuntimeTools(
         let report: string | undefined;
         if (params.includeReport && run.reportPath) report = await readLocalReport(run.reportPath);
         return textResult(JSON.stringify({ ...run, ...(report ? { report } : {}) }, null, 2));
-      },
-    },
-    {
-      name: "search_investment_web",
-      label: "Search investment web",
-      description: "Search current investment, market, company, policy, or AI industry information through the configured Tavily MCP. Use only when current external evidence is required.",
-      parameters: searchParameters,
-      async execute(_id, rawParams) {
-        const params = rawParams as { query: string };
-        if (!config.tavilyMcpEnabled || !config.tavilyApiKey) {
-          return textResult("Tavily MCP is not configured. Use local task runs and reports, or explain that current web evidence is unavailable.", true);
-        }
-        const definition: BriefingTaskDefinition = {
-          task: "market-briefing",
-          title: "Interactive research search",
-          queries: [{ category: "交互研究", query: params.query, topic: "general" }],
-          resolveMode: () => "intraday",
-          buildPrompt: () => "",
-        };
-        const sources = await collectLiveSources(
-          definition,
-          config.tavilyMcpUrl,
-          config.tavilyApiKey,
-          config.searchMaxResults,
-          new Date(),
-        );
-        return textResult(JSON.stringify(sources.map((source) => ({
-          title: source.title,
-          url: source.url,
-          summary: source.summary.slice(0, 2_000),
-          publishedAt: source.publishedAt,
-          retrievedAt: source.retrievedAt,
-        })), null, 2));
       },
     },
     {

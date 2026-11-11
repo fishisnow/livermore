@@ -15,6 +15,8 @@ export interface NormalizedMarketQuote {
   mainNetInflow?: number;
   rsi?: number;
   macd?: number;
+  atr?: number;
+  atrStopLoss?: number;
   evidence: NormalizedMarketEvidence[];
 }
 

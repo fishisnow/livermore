@@ -11,10 +11,12 @@ Livermore 是运行在个人电脑上的长期投资研究 Agent。它定时采�
 可以通过独立的 **Livermore.app** 使用聊天、任务、持仓、报告和 Trace，无需打开浏览器。桌面版内置 Node 运行环境，提供原生设置、Dock 图标、后台任务菜单和现有项目数据导入。
 
 ```bash
-npm run desktop:build
+npm run desktop:update
 ```
 
-打开生成的 `release/Livermore-0.1.0-arm64.dmg`，把 Livermore 拖入“应用程序”。首次启动选择导入原项目，后续数据保存在 `~/Library/Application Support/Livermore/`。安装或构建桌面版后，`livermore` 与 `livermore ui` 会优先打开应用窗口。支持 macOS 14+，安装包架构与构建电脑一致。详细安装、后台运行、数据位置和签名说明见[桌面版说明](docs/MACOS.md)。
+会退出正在运行的 Livermore，打包并覆盖 `/Applications/Livermore.app`，然后重新打开。只要 DMG 时加上 `--dmg`：`npm run desktop:update -- --dmg`。也可只构建：`npm run desktop:build`。
+
+首次启动选择导入原项目，后续数据保存在 `~/Library/Application Support/Livermore/`。安装或构建桌面版后，`livermore` 与 `livermore ui` 会优先打开应用窗口。支持 macOS 14+，安装包架构与构建电脑一致。详细安装、后台运行、数据位置和签名说明见[桌面版说明](docs/MACOS.md)。
 
 ## 使用 Cursor 订阅
 

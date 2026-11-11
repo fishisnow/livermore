@@ -35,6 +35,10 @@ export function normalizePortfolioMarketData(
       }
       if (existing.rsi === undefined && quote.rsi !== undefined) existing.rsi = quote.rsi;
       if (existing.macd === undefined && quote.macd !== undefined) existing.macd = quote.macd;
+      if (existing.atr === undefined && quote.atr !== undefined) existing.atr = quote.atr;
+      if (existing.atrStopLoss === undefined && quote.atrStopLoss !== undefined) {
+        existing.atrStopLoss = quote.atrStopLoss;
+      }
       existing.evidence.push(...quote.evidence);
     }
   }

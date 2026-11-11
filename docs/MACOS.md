@@ -90,6 +90,14 @@ Livermore 使用 Pi 1.5.0 加载社区扩展 `@rahularya01/pi-cursor@1.4.39`，�
 构建机器需要 Node 22+、npm 和 Xcode Command Line Tools。依赖安装后执行：
 
 ```bash
+npm run desktop:update
+```
+
+会退出正在运行的应用，打包后覆盖 `/Applications/Livermore.app` 并重新打开。默认只构建 `.app`；需要 DMG 时执行 `npm run desktop:update -- --dmg`，只打包不打开时加 `--no-open`。
+
+也可以只构建：
+
+```bash
 npm run desktop:build
 ```
 

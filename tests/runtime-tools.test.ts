@@ -68,6 +68,7 @@ describe("interactive Agent runtime tools", () => {
   it("separates Futu quotes from A-share-only East Money fund flow", async () => {
     const database = new InvestmentDatabase(":memory:");
     const tools = createRuntimeTools(loadConfig({}), database);
+    expect(tools.find((item) => item.name === "search_investment_web")).toBeUndefined();
     expect(tools.find((item) => item.name === "query_futu_market")).toBeDefined();
     expect(tools.find((item) => item.name === "query_futu_news")).toBeDefined();
     const fundFlowTool = tools.find((item) => item.name === "query_a_share_main_fund_flow");

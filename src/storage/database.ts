@@ -11,6 +11,38 @@ export type TaskName = BuiltinTaskName | CustomTaskName;
 export interface CustomTask { id: CustomTaskName; title: string; createdAt: string; deletedAt: string | null }
 export interface ChatRecord { id: string; title: string; createdAt: string; updatedAt: string; status: string; error: string | null }
 
+export interface McpToolRecord {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  enabled: boolean;
+}
+
+export interface McpServerRecord {
+  id: string;
+  name: string;
+  endpoint: string;
+  enabled: boolean;
+  apiKey: string | null;
+  authQueryParam: string | null;
+  description: string;
+  briefingSearch: boolean;
+  tools: McpToolRecord[];
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpServerInsert {
+  name: string;
+  endpoint: string;
+  enabled: boolean;
+  apiKey: string | null;
+  authQueryParam: string | null;
+  description: string;
+  briefingSearch: boolean;
+}
+
 export interface NotificationDelivery {
   channel: string;
   status: string;
@@ -82,16 +114,29 @@ export interface PortfolioPositionInput {
   quantity: number;
   purchasedAt: string;
   costBasis: number;
+  /** 最新价上涨到该价时提醒；空表示不启用。 */
+  alertAbove?: number | null;
+  /** 最新价下跌到该价时提醒；空表示不启用。 */
+  alertBelow?: number | null;
+  /** 添加持仓时按当时行情计算，之后不再改写。 */
+  atr?: number | null;
+  atrStopLoss?: number | null;
 }
 
 export interface PortfolioPosition extends PortfolioPositionInput {
   id: string;
+  alertAbove: number | null;
+  alertBelow: number | null;
+  alertAboveFiredAt: string | null;
+  alertBelowFiredAt: string | null;
   createdAt: string;
   updatedAt: string;
   latestName: string | null;
   latestPrice: number | null;
   pnlPct: number | null;
   dayChangePct: number | null;
+  atr: number | null;
+  atrStopLoss: number | null;
   severity: "normal" | "warning" | "critical" | null;
   riskSummary: string | null;
   lastCheckedAt: string | null;
@@ -106,6 +151,8 @@ export interface PositionRiskCheckInput {
   pnlPct?: number;
   dayChangePct?: number;
   mainNetInflow?: number;
+  atr?: number;
+  atrStopLoss?: number;
   severity: "normal" | "warning" | "critical";
   signals: string[];
   rawData: unknown;
@@ -434,19 +481,43 @@ export class InvestmentDatabase {
     const id = randomUUID();
     const now = new Date().toISOString();
     this.db.prepare(`
-      INSERT INTO portfolio_positions (id, symbol, quantity, purchased_at, cost_basis, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, normalizeSymbol(input.symbol), input.quantity, input.purchasedAt, input.costBasis, now, now);
+      INSERT INTO portfolio_positions (
+        id, symbol, quantity, purchased_at, cost_basis, alert_above, alert_below,
+        atr, atr_stop_loss, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id, normalizeSymbol(input.symbol), input.quantity, input.purchasedAt, input.costBasis,
+      input.alertAbove ?? null, input.alertBelow ?? null,
+      input.atr ?? null, input.atrStopLoss ?? null, now, now,
+    );
     return this.getPosition(id)!;
   }
 
   updatePosition(id: string, input: PortfolioPositionInput): PortfolioPosition | undefined {
-    const result = this.db.prepare(`
+    const current = this.getPosition(id);
+    if (!current) return undefined;
+    const alertAbove = input.alertAbove ?? null;
+    const alertBelow = input.alertBelow ?? null;
+    this.db.prepare(`
       UPDATE portfolio_positions
-      SET symbol = ?, quantity = ?, purchased_at = ?, cost_basis = ?, updated_at = ?
+      SET symbol = ?, quantity = ?, purchased_at = ?, cost_basis = ?,
+          alert_above = ?, alert_below = ?,
+          alert_above_fired_at = ?, alert_below_fired_at = ?,
+          updated_at = ?
       WHERE id = ?
-    `).run(normalizeSymbol(input.symbol), input.quantity, input.purchasedAt, input.costBasis, new Date().toISOString(), id);
-    return Number(result.changes) > 0 ? this.getPosition(id) : undefined;
+    `).run(
+      normalizeSymbol(input.symbol), input.quantity, input.purchasedAt, input.costBasis,
+      alertAbove, alertBelow,
+      sameNumber(current.alertAbove, alertAbove) ? current.alertAboveFiredAt : null,
+      sameNumber(current.alertBelow, alertBelow) ? current.alertBelowFiredAt : null,
+      new Date().toISOString(), id,
+    );
+    return this.getPosition(id);
+  }
+
+  setPriceAlertFired(id: string, side: "above" | "below", firedAt: string | null): void {
+    const column = side === "above" ? "alert_above_fired_at" : "alert_below_fired_at";
+    this.db.prepare(`UPDATE portfolio_positions SET ${column} = ? WHERE id = ?`).run(firedAt, id);
   }
 
   deletePosition(id: string): boolean {
@@ -499,12 +570,13 @@ export class InvestmentDatabase {
     this.db.prepare(`
       INSERT INTO position_risk_checks (
         id, run_id, position_id, checked_at, name, current_price, pnl_pct, day_change_pct,
-        main_net_inflow, severity, risk_summary, signals_json, raw_data_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        main_net_inflow, atr, atr_stop_loss, severity, risk_summary, signals_json, raw_data_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id, input.runId, input.positionId, input.checkedAt, input.name ?? null,
       input.currentPrice ?? null, input.pnlPct ?? null, input.dayChangePct ?? null,
-      input.mainNetInflow ?? null, input.severity, input.signals.join("；"),
+      input.mainNetInflow ?? null, input.atr ?? null, input.atrStopLoss ?? null,
+      input.severity, input.signals.join("；"),
       JSON.stringify(input.signals), JSON.stringify(input.rawData).slice(0, 100_000),
     );
     return {
@@ -544,6 +616,74 @@ export class InvestmentDatabase {
         explanation: String(value.explanation),
       };
     });
+  }
+
+  listMcpServers(): McpServerRecord[] {
+    return this.db.prepare("SELECT * FROM mcp_servers ORDER BY created_at, name").all().map(mapMcpServer);
+  }
+
+  getMcpServer(id: string): McpServerRecord | undefined {
+    const row = this.db.prepare("SELECT * FROM mcp_servers WHERE id = ?").get(id);
+    return row ? mapMcpServer(row) : undefined;
+  }
+
+  insertMcpServer(input: McpServerInsert): McpServerRecord {
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    if (input.briefingSearch) this.db.prepare("UPDATE mcp_servers SET briefing_search = 0").run();
+    this.db.prepare(`
+      INSERT INTO mcp_servers (
+        id, name, endpoint, enabled, api_key, auth_query_param, description, briefing_search, tools_json, last_error, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', NULL, ?, ?)
+    `).run(id, input.name, input.endpoint, input.enabled ? 1 : 0, input.apiKey, input.authQueryParam, input.description, input.briefingSearch ? 1 : 0, now, now);
+    return this.getMcpServer(id)!;
+  }
+
+  updateMcpServer(id: string, patch: Partial<McpServerInsert & { tools: McpToolRecord[]; lastError: string | null }>): McpServerRecord | undefined {
+    const current = this.getMcpServer(id);
+    if (!current) return undefined;
+    const next = {
+      name: patch.name ?? current.name,
+      endpoint: patch.endpoint ?? current.endpoint,
+      enabled: patch.enabled ?? current.enabled,
+      apiKey: patch.apiKey === undefined ? current.apiKey : patch.apiKey,
+      authQueryParam: patch.authQueryParam === undefined ? current.authQueryParam : patch.authQueryParam,
+      description: patch.description ?? current.description,
+      briefingSearch: patch.briefingSearch ?? current.briefingSearch,
+      tools: patch.tools ?? current.tools,
+      lastError: patch.lastError === undefined ? current.lastError : patch.lastError,
+    };
+    const now = new Date().toISOString();
+    if (next.briefingSearch) this.db.prepare("UPDATE mcp_servers SET briefing_search = 0 WHERE id != ?").run(id);
+    this.db.prepare(`
+      UPDATE mcp_servers
+      SET name = ?, endpoint = ?, enabled = ?, api_key = ?, auth_query_param = ?, description = ?,
+          briefing_search = ?, tools_json = ?, last_error = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      next.name, next.endpoint, next.enabled ? 1 : 0, next.apiKey, next.authQueryParam, next.description,
+      next.briefingSearch ? 1 : 0, JSON.stringify(next.tools), next.lastError, now, id,
+    );
+    return this.getMcpServer(id);
+  }
+
+  deleteMcpServer(id: string): boolean {
+    return Number(this.db.prepare("DELETE FROM mcp_servers WHERE id = ?").run(id).changes) > 0;
+  }
+
+  private seedMcpRegistry(): void {
+    const seeded = this.db.prepare("SELECT value FROM app_meta WHERE key = 'mcp_registry_seeded'").get();
+    if (seeded) return;
+    const enabled = (process.env.TAVILY_MCP_ENABLED ?? "").trim().toLowerCase() !== "false";
+    const endpoint = process.env.TAVILY_MCP_URL?.trim() || "https://mcp.tavily.com/mcp/";
+    const apiKey = process.env.TAVILY_API_KEY?.trim() || null;
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO mcp_servers (
+        id, name, endpoint, enabled, api_key, auth_query_param, description, briefing_search, tools_json, last_error, created_at, updated_at
+      ) VALUES ('tavily', 'Tavily Search', ?, ?, ?, 'tavilyApiKey', '', 1, '[]', NULL, ?, ?)
+    `).run(endpoint, enabled ? 1 : 0, apiKey, now, now);
+    this.db.prepare("INSERT INTO app_meta (key, value) VALUES ('mcp_registry_seeded', '1')").run();
   }
 
   private migrate(): void {
@@ -617,6 +757,8 @@ export class InvestmentDatabase {
       CREATE TABLE IF NOT EXISTS portfolio_positions (
         id TEXT PRIMARY KEY, symbol TEXT NOT NULL, quantity REAL NOT NULL CHECK(quantity > 0),
         purchased_at TEXT NOT NULL, cost_basis REAL NOT NULL CHECK(cost_basis > 0),
+        alert_above REAL, alert_below REAL, alert_above_fired_at TEXT, alert_below_fired_at TEXT,
+        atr REAL, atr_stop_loss REAL,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_portfolio_positions_symbol ON portfolio_positions(symbol);
@@ -624,17 +766,77 @@ export class InvestmentDatabase {
         id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
         position_id TEXT NOT NULL REFERENCES portfolio_positions(id) ON DELETE CASCADE,
         checked_at TEXT NOT NULL, name TEXT, current_price REAL, pnl_pct REAL, day_change_pct REAL,
-        main_net_inflow REAL, severity TEXT NOT NULL, risk_summary TEXT NOT NULL,
+        main_net_inflow REAL, atr REAL, atr_stop_loss REAL, severity TEXT NOT NULL, risk_summary TEXT NOT NULL,
         signals_json TEXT NOT NULL, raw_data_json TEXT NOT NULL, alerted_at TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_position_risk_latest
         ON position_risk_checks(position_id, checked_at DESC);
+      CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS mcp_servers (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, endpoint TEXT NOT NULL, enabled INTEGER NOT NULL,
+        api_key TEXT, auth_query_param TEXT, description TEXT NOT NULL DEFAULT '',
+        briefing_search INTEGER NOT NULL DEFAULT 0, tools_json TEXT NOT NULL DEFAULT '[]',
+        last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
     `);
     const runColumns = this.db.prepare("PRAGMA table_info(task_runs)").all() as Array<{ name: string }>;
     if (!runColumns.some((column) => column.name === "cost_currency")) {
       this.db.exec("ALTER TABLE task_runs ADD COLUMN cost_currency TEXT NOT NULL DEFAULT 'USD'");
     }
+    this.ensureColumn("portfolio_positions", "alert_above", "REAL");
+    this.ensureColumn("portfolio_positions", "alert_below", "REAL");
+    this.ensureColumn("portfolio_positions", "alert_above_fired_at", "TEXT");
+    this.ensureColumn("portfolio_positions", "alert_below_fired_at", "TEXT");
+    this.ensureColumn("portfolio_positions", "atr", "REAL");
+    this.ensureColumn("portfolio_positions", "atr_stop_loss", "REAL");
+    this.ensureColumn("position_risk_checks", "atr", "REAL");
+    this.ensureColumn("position_risk_checks", "atr_stop_loss", "REAL");
+    this.seedMcpRegistry();
   }
+
+  private ensureColumn(table: "portfolio_positions" | "position_risk_checks", name: string, type: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === name)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+    }
+  }
+}
+
+function mapMcpServer(row: unknown): McpServerRecord {
+  const value = row as Record<string, string | number | null>;
+  let tools: McpToolRecord[] = [];
+  try {
+    const parsed = JSON.parse(String(value.tools_json ?? "[]")) as unknown;
+    if (Array.isArray(parsed)) {
+      tools = parsed.flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const tool = item as Record<string, unknown>;
+        if (typeof tool.name !== "string" || typeof tool.enabled !== "boolean") return [];
+        return [{
+          name: tool.name,
+          description: typeof tool.description === "string" ? tool.description : "",
+          inputSchema: tool.inputSchema && typeof tool.inputSchema === "object" ? tool.inputSchema as Record<string, unknown> : { type: "object", properties: {} },
+          enabled: tool.enabled,
+        }];
+      });
+    }
+  } catch {
+    tools = [];
+  }
+  return {
+    id: String(value.id),
+    name: String(value.name),
+    endpoint: String(value.endpoint),
+    enabled: Number(value.enabled) === 1,
+    apiKey: value.api_key == null ? null : String(value.api_key),
+    authQueryParam: value.auth_query_param == null ? null : String(value.auth_query_param),
+    description: String(value.description ?? ""),
+    briefingSearch: Number(value.briefing_search) === 1,
+    tools,
+    lastError: value.last_error == null ? null : String(value.last_error),
+    createdAt: String(value.created_at),
+    updatedAt: String(value.updated_at),
+  };
 }
 
 function mapChat(row: unknown): ChatRecord {
@@ -650,12 +852,18 @@ function mapPortfolioPosition(row: unknown): PortfolioPosition {
     quantity: Number(value.quantity),
     purchasedAt: String(value.purchased_at),
     costBasis: Number(value.cost_basis),
+    alertAbove: nullableNumber(value.alert_above),
+    alertBelow: nullableNumber(value.alert_below),
+    alertAboveFiredAt: value.alert_above_fired_at === null || value.alert_above_fired_at === undefined ? null : String(value.alert_above_fired_at),
+    alertBelowFiredAt: value.alert_below_fired_at === null || value.alert_below_fired_at === undefined ? null : String(value.alert_below_fired_at),
     createdAt: String(value.created_at),
     updatedAt: String(value.updated_at),
     latestName: value.latest_name === null ? null : String(value.latest_name),
     latestPrice: nullableNumber(value.latest_price),
     pnlPct: nullableNumber(value.pnl_pct),
     dayChangePct: nullableNumber(value.day_change_pct),
+    atr: nullableNumber(value.atr),
+    atrStopLoss: nullableNumber(value.atr_stop_loss),
     severity: value.severity === null ? null : value.severity as PortfolioPosition["severity"],
     riskSummary: value.risk_summary === null ? null : String(value.risk_summary),
     lastCheckedAt: value.last_checked_at === null ? null : String(value.last_checked_at),
@@ -680,6 +888,10 @@ function nullableNumber(value: string | number | null | undefined): number | nul
 
 function normalizeSymbol(value: string): string {
   return value.trim().toUpperCase();
+}
+
+function sameNumber(left: number | null, right: number | null): boolean {
+  return left === right;
 }
 
 function mapRunRecord(row: unknown): RunRecord {

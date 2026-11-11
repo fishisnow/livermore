@@ -234,6 +234,14 @@
         <label for="position-cost">每股买入成本</label>
         <input id="position-cost" name="costBasis" type="number" min="0.0001" step="any" placeholder="0.00" required>
       </div>
+      <div>
+        <label for="position-alert-above">上涨预警</label>
+        <input id="position-alert-above" name="alertAbove" type="number" min="0.0001" step="any" placeholder="可留空" inputmode="decimal">
+      </div>
+      <div>
+        <label for="position-alert-below">下跌预警</label>
+        <input id="position-alert-below" name="alertBelow" type="number" min="0.0001" step="any" placeholder="可留空" inputmode="decimal">
+      </div>
       <div class="position-form-actions">
         <button class="primary-action" id="save-position" type="submit">添加持仓</button>
         <button class="secondary-action" id="cancel-position-edit" type="button" hidden>取消修改</button>
@@ -247,6 +255,8 @@
             <th>数量</th>
             <th>成本</th>
             <th>最新价</th>
+            <th>ATR止损</th>
+            <th>价格预警</th>
             <th>持仓盈亏</th>
             <th>当日</th>
             <th>风险状态</th>
@@ -260,45 +270,54 @@
       <strong>还没有持仓</strong>
       <p>录入股票代码、数量、买入时间和成本，开始跟踪持仓风险。</p>
     </div>
-    <p class="portfolio-footnote">A 股主力资金来自东方财富数据中心，行情可能存在延迟。风险线用于提醒复核，不会触发任何交易。</p>
   </dialog>
 
   <dialog id="capability-dialog" class="capability-dialog">
     <div class="dialog-head">
       <div>
         <p class="eyebrow">Capability ledger</p>
-        <h2>Livermore 能力账本</h2>
+        <h2>研究能力</h2>
       </div>
-      <button class="icon-button" id="close-capability-dialog" type="button" aria-label="关闭">×</button>
-    </div>
-    <div class="capability-ledger-intro">
-      <p>这里只展示 Livermore 运行时真正能访问的能力，不包含 Codex 桌面环境中的全局技能或 MCP。</p>
-      <button id="refresh-capabilities" type="button">重新扫描</button>
+      <div class="dialog-head-actions">
+        <button class="secondary-action" id="refresh-capabilities" type="button">重新扫描</button>
+        <button class="icon-button" id="close-capability-dialog" type="button" aria-label="关闭">×</button>
+      </div>
     </div>
     <div class="capability-ledger">
-      <section>
-        <div class="ledger-title">
-          <div><span>Skills</span><strong id="skill-total">0</strong></div>
-          <p>项目 <code>skills/</code> 目录，调用时按需加载</p>
-        </div>
-        <div id="skill-ledger" class="ledger-list"></div>
-      </section>
-      <section>
+      <div class="capability-column">
+        <section class="capability-section">
+          <div class="ledger-title">
+            <div><span>Skills</span><strong id="skill-total">0</strong></div>
+          </div>
+          <div id="skill-ledger" class="ledger-list"></div>
+        </section>
+        <section class="capability-section">
+          <div class="ledger-title">
+            <div><span>数据连接</span><strong id="connection-total">0</strong></div>
+          </div>
+          <div id="connection-ledger" class="ledger-list"></div>
+        </section>
+      </div>
+      <section class="capability-section capability-mcp">
         <div class="ledger-title">
           <div><span>MCP</span><strong id="mcp-total">0</strong></div>
-          <p>仅统计 Agent 运行时实际配置的 MCP 服务</p>
+          <button class="secondary-action" id="add-mcp" type="button">添加</button>
         </div>
         <div id="mcp-ledger" class="ledger-list"></div>
-      </section>
-      <section>
-        <div class="ledger-title">
-          <div><span>数据连接</span><strong id="connection-total">0</strong></div>
-          <p>Skill API 与内置降级数据源，不等同于 MCP</p>
-        </div>
-        <div id="connection-ledger" class="ledger-list"></div>
+        <form id="mcp-form" class="mcp-form" hidden>
+          <input id="mcp-id" type="hidden">
+          <input id="mcp-mode" type="hidden">
+          <strong class="mcp-form-title" id="mcp-form-title">配置 MCP</strong>
+          <label id="mcp-api-key-field">API Key<input id="mcp-api-key" name="apiKey" type="password" maxlength="500" autocomplete="off" placeholder="API Key"></label>
+          <label id="mcp-json-field" hidden>JSON<textarea id="mcp-json" name="config" rows="10" spellcheck="false"></textarea></label>
+          <div class="mcp-form-actions">
+            <button class="primary-action" type="submit">保存</button>
+            <button class="secondary-action" id="cancel-mcp" type="button">取消</button>
+          </div>
+        </form>
       </section>
       <details class="tool-ledger">
-        <summary>查看 Agent 内置工具 <span id="tool-total">0</span></summary>
+        <summary>内置工具 <span id="tool-total">0</span></summary>
         <div id="tool-ledger" class="ledger-list"></div>
       </details>
     </div>

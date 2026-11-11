@@ -32,6 +32,9 @@ export class PersistentChatSessions {
     if (this.isBusy(id)) throw new ChatSessionError("请等待当前回答完成后再删除会话。", 409);
     const removed = this.database.deleteChat(id); this.loaded.delete(id); return removed;
   }
+  dropIdleAgents(): void {
+    for (const session of this.loaded.values()) if (!session.busy) delete session.agent;
+  }
   cleanup() { for (const [id, session] of this.loaded) if (!session.busy && session.lastUsedAt < Date.now() - 12 * 60 * 60_000) this.loaded.delete(id); }
   async shutdown() {
     const agents = [...this.loaded.values()].flatMap((session) => session.agent ? [session.agent] : []);

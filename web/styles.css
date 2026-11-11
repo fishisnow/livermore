@@ -1161,7 +1161,7 @@ dialog::backdrop {
 }
 .position-form {
   display:grid;
-  grid-template-columns:1fr .8fr 1.35fr 1fr auto;
+  grid-template-columns:repeat(auto-fit, minmax(148px, 1fr));
   gap:12px;
   align-items:end;
   margin-bottom:23px
@@ -1185,7 +1185,9 @@ dialog::backdrop {
 .position-form-actions {
   display:flex;
   gap:7px;
-  padding-bottom:1px
+  padding-bottom:1px;
+  grid-column:1 / -1;
+  justify-content:flex-start
 }
 .portfolio-table-wrap {
   overflow-x:auto;
@@ -1259,6 +1261,9 @@ dialog::backdrop {
   max-width:240px;
   min-width:120px
 }
+.alert-hit {
+  color:var(--amber)
+}
 .position-actions button {
   display:block;
   padding:3px;
@@ -1282,31 +1287,32 @@ dialog::backdrop {
   margin-top:12px;
   font-size:12px
 }
-.portfolio-footnote {
-  color:var(--faint);
-  font-size:10px;
-  line-height:1.8;
-  margin-top:17px
+.capability-ledger {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);
+  gap:28px 32px;
+  align-items:start;
+  margin-top:8px
 }
-.capability-ledger-intro {
+.capability-column {
+  display:grid;
+  gap:28px;
+  min-width:0
+}
+.capability-section {
+  min-width:0
+}
+.capability-mcp #mcp-ledger {
+  max-height:min(62vh,560px);
+  overflow:auto;
+  padding-right:2px;
+}
+.ledger-title {
   display:flex;
   align-items:center;
   justify-content:space-between;
-  gap:20px;
-  margin:20px 0 25px
-}
-.capability-ledger-intro p {
-  font-size:11px;
-  line-height:1.8;
-  color:var(--muted)
-}
-.capability-ledger {
-  display:grid;
-  grid-template-columns:repeat(2,minmax(0,1fr));
-  gap:26px
-}
-.ledger-title {
-  margin-bottom:13px
+  gap:12px;
+  margin-bottom:12px
 }
 .ledger-title>div {
   display:flex;
@@ -1323,11 +1329,8 @@ dialog::backdrop {
   padding:2px 7px;
   border-radius:8px
 }
-.ledger-title p {
-  color:var(--muted);
-  font-size:10px;
-  margin-top:8px;
-  line-height:1.7
+.ledger-title #add-mcp {
+  flex:0 0 auto
 }
 .ledger-list {
   display:grid;
@@ -1391,6 +1394,77 @@ dialog::backdrop {
   overflow-wrap:anywhere;
   color:var(--muted)
 }
+.mcp-form {
+  display:grid;
+  gap:10px;
+  margin-top:10px;
+  padding:14px;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:var(--subtle)
+}
+.mcp-form[hidden],
+.mcp-form [hidden] { display:none }
+.mcp-form-title {
+  font-size:12px;
+  color:var(--ink)
+}
+.mcp-form label {
+  display:grid;
+  gap:4px;
+  font-size:10px;
+  color:var(--muted)
+}
+.mcp-form input[type="password"] {
+  border:1px solid var(--line);
+  border-radius:6px;
+  padding:8px 9px;
+  background:var(--surface);
+  color:var(--ink);
+  font-size:12px
+}
+.mcp-form textarea {
+  width:100%;
+  min-height:180px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11px;
+  line-height:1.5;
+  resize:vertical;
+  border:1px solid var(--line);
+  border-radius:6px;
+  padding:8px;
+  background:var(--surface);
+  color:var(--ink)
+}
+.mcp-form-actions,.mcp-card-actions {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px
+}
+.mcp-card-actions { margin-top:12px }
+.mcp-card { cursor:pointer }
+.mcp-card[data-mcp-system="true"] { cursor:default }
+.mcp-switch {
+  display:flex;
+  align-items:center;
+  gap:6px;
+  font-size:10px;
+  color:var(--muted)
+}
+.mcp-tool-summary {
+  margin-top:10px;
+  font-size:10px;
+  line-height:1.6;
+  color:var(--faint);
+  overflow-wrap:anywhere
+}
+.mcp-error {
+  margin-top:8px;
+  color:var(--amber);
+  font-size:10px;
+  line-height:1.6
+}
+.mcp-delete { color:var(--muted) }
 .ledger-empty {
   border:1px dashed var(--line);
   border-radius:8px;
@@ -1410,16 +1484,25 @@ dialog::backdrop {
 .tool-ledger {
   grid-column:1/-1;
   border-top:1px solid var(--line);
-  padding-top:20px
+  padding-top:18px;
+  margin-top:4px;
+  position:relative;
+  z-index:1;
+  background:var(--canvas)
 }
 .tool-ledger summary {
   cursor:pointer;
   color:var(--muted);
   font-size:12px;
-  margin-bottom:18px
+  margin-bottom:14px
+}
+.tool-ledger summary span {
+  margin-left:6px;
+  font-size:11px;
+  color:var(--faint)
 }
 .tool-ledger .ledger-list {
-  grid-template-columns:repeat(2,minmax(0,1fr))
+  grid-template-columns:repeat(3,minmax(0,1fr))
 }
 .toast {
   position:fixed;
@@ -1513,9 +1596,12 @@ dialog::backdrop {
   .workspace-panel[open],body[data-view="tasks"] .tasks-page {
     padding-inline:20px
   }
-  .capability-ledger,.tool-ledger .ledger-list {
+  .capability-ledger,
+  .capability-column,
+  .tool-ledger .ledger-list {
     grid-template-columns:1fr
   }
+  .capability-mcp #mcp-ledger { max-height:none }
   .portfolio-summary {
     flex-wrap:wrap;
     gap:14px 0;

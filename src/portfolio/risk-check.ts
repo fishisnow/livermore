@@ -23,6 +23,7 @@ import {
 } from "../storage/database.js";
 import { createRuntimeTools } from "../tools/runtime-tools.js";
 import { getTaskSettings } from "../tasks/task-settings.js";
+import { evaluatePriceAlerts } from "./price-alert.js";
 
 type Severity = "normal" | "warning" | "critical";
 
@@ -247,6 +248,7 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
       const warningCount = assessed.filter((item) => item.severity === "warning").length;
       const criticalCount = assessed.filter((item) => item.severity === "critical").length;
       const alerts = assessed.filter((item) => item.shouldAlert);
+      const priceAlerts = collectPriceAlerts(assessed, now);
 
       if (positions.length > 0) {
         await telemetry.withSpan("portfolio.summary_delivery", {
@@ -268,6 +270,34 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
             ),
           });
         });
+      }
+
+      if (priceAlerts.lines.length > 0) {
+        await telemetry.withSpan("portfolio.price_alert", {
+          "openinference.span.kind": "TOOL",
+          "livermore.price_alert.count": priceAlerts.lines.length,
+        }, async () => {
+          const checkedAt = new Intl.DateTimeFormat("zh-CN", {
+            timeZone: options.config.timezone,
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          }).format(now);
+          await messageCenter.publish({
+            runId,
+            severity: "warning",
+            title: `Livermore 价格预警：${priceAlerts.lines.length} 项触发`,
+            body: [
+              `检查时间：${checkedAt}`,
+              ...priceAlerts.lines,
+              "价格回到预警区间内后会重新布防。以上内容仅供研究参考，不构成投资建议，也不会触发交易。",
+            ].join("\n"),
+          });
+        });
+      }
+      for (const update of priceAlerts.updates) {
+        database.setPriceAlertFired(update.positionId, update.side, update.firedAt);
       }
 
       if (alerts.length > 0) {
@@ -512,6 +542,28 @@ export function evaluateRisk(input: {
   return { severity, signals };
 }
 
+function collectPriceAlerts(items: AssessedPosition[], now: Date): {
+  lines: string[];
+  updates: Array<{ positionId: string; side: "above" | "below"; firedAt: string | null }>;
+} {
+  const lines: string[] = [];
+  const updates: Array<{ positionId: string; side: "above" | "below"; firedAt: string | null }> = [];
+  for (const item of items) {
+    for (const decision of evaluatePriceAlerts(item.position, item.currentPrice)) {
+      updates.push({
+        positionId: item.position.id,
+        side: decision.side,
+        firedAt: decision.action === "fire" ? now.toISOString() : null,
+      });
+      if (decision.action === "fire" && item.currentPrice !== undefined) {
+        const direction = decision.side === "above" ? "上涨触及" : "下跌触及";
+        lines.push(`${item.name}（${item.position.symbol}）最新价 ${formatMoney(item.currentPrice)} 已${direction}预警价 ${formatMoney(decision.threshold)}。`);
+      }
+    }
+  }
+  return { lines, updates };
+}
+
 function shouldSendAlert(
   current: Severity,
   previous: Severity | null,
@@ -556,6 +608,7 @@ function buildReport(
     formatNumber(item.position.quantity),
     formatMoney(item.position.costBasis),
     item.currentPrice === undefined ? "—" : formatMoney(item.currentPrice),
+    item.position.atrStopLoss == null ? "—" : formatMoney(item.position.atrStopLoss),
     item.pnlPct === undefined ? "—" : formatPct(item.pnlPct),
     item.dayChangePct === undefined ? "—" : formatPct(item.dayChangePct),
     item.rsi === undefined ? "—" : item.rsi.toFixed(2),
@@ -576,9 +629,9 @@ ${agentAnalysis}
 
 ## 确定性风险复核
 
-| 股票代码 | 名称 | 持仓数量 | 成本 | 最新价 | 持仓盈亏 | 当日涨跌 | RSI | MACD | A股主力净流入 | 风险 | 信号 |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
-${rows.length > 0 ? rows.map((row) => `| ${row} |`).join("\n") : "| — | — | — | — | — | — | — | — | — | — | 正常 | 当前没有持仓 |"}
+| 股票代码 | 名称 | 持仓数量 | 成本 | 最新价 | ATR止损 | 持仓盈亏 | 当日涨跌 | RSI | MACD | A股主力净流入 | 风险 | 信号 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
+${rows.length > 0 ? rows.map((row) => `| ${row} |`).join("\n") : "| — | — | — | — | — | — | — | — | — | — | — | 正常 | 当前没有持仓 |"}
 
 以上内容仅供研究参考，不构成投资建议。`;
 }

@@ -10,6 +10,7 @@ import { observeAgent, Telemetry } from "../observability/telemetry.js";
 import { databasePath, reportsDirectory } from "../project-paths.js";
 import { InvestmentDatabase, type CustomTaskName } from "../storage/database.js";
 import { createRuntimeTools } from "../tools/runtime-tools.js";
+import { createMcpAgentTools } from "../mcp/agent-tools.js";
 import { getTaskSettings } from "./task-settings.js";
 
 export async function runCustomTask(options: { task: CustomTaskName; config: AppConfig; scheduledSlot?: string; force?: boolean; database?: InvestmentDatabase; reportDirectory?: string; createAgent?: () => Promise<Agent> }) {
@@ -32,7 +33,7 @@ export async function runCustomTask(options: { task: CustomTaskName; config: App
       const traceId = telemetry.enabled ? span.spanContext().traceId : undefined;
       if (traceId) db.setTraceId(runId!, traceId);
       agent = options.createAgent ? await options.createAgent() : await createInvestmentAgent(options.config, {
-        tools: createRuntimeTools(options.config, db), includeReportTool: false,
+        tools: [...createRuntimeTools(options.config, db), ...createMcpAgentTools(db.listMcpServers())], includeReportTool: false,
         systemPromptAppend: "你正在执行用户配置的独立研究任务。按任务目标使用实际注册的只读工具，实时资料必须有来源与时间。只输出最终中文 Markdown 报告；不要执行交易或自行发送消息。",
       });
       timer = setTimeout(() => agent?.abort(), 10 * 60_000);

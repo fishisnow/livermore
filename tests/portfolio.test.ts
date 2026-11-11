@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { loadConfig } from "../src/config.js";
 import { Telemetry } from "../src/observability/telemetry.js";
 import {
@@ -26,7 +27,10 @@ describe("portfolio ledger", () => {
       symbol: "600519.SH",
       quantity: 100,
       costBasis: 1_420.5,
+      alertAbove: null,
+      alertBelow: null,
       severity: null,
+      atrStopLoss: null,
     });
 
     const updated = database.updatePosition(created.id, {
@@ -34,12 +38,86 @@ describe("portfolio ledger", () => {
       quantity: 200,
       purchasedAt: "2026-07-01T01:30:00.000Z",
       costBasis: 1_400,
+      alertAbove: 1_500,
+      alertBelow: 1_300,
     });
-    expect(updated).toMatchObject({ quantity: 200, costBasis: 1_400 });
-    expect(database.listPositions()).toHaveLength(1);
+    expect(updated).toMatchObject({ quantity: 200, costBasis: 1_400, alertAbove: 1_500, alertBelow: 1_300 });
+    database.setPriceAlertFired(created.id, "above", "2026-08-01T00:00:00.000Z");
+    const kept = database.updatePosition(created.id, {
+      symbol: "600519.SH",
+      quantity: 200,
+      purchasedAt: "2026-07-01T01:30:00.000Z",
+      costBasis: 1_400,
+      alertAbove: 1_500,
+      alertBelow: 1_300,
+    });
+    expect(kept?.alertAboveFiredAt).toBe("2026-08-01T00:00:00.000Z");
+    const reset = database.updatePosition(created.id, {
+      symbol: "600519.SH",
+      quantity: 200,
+      purchasedAt: "2026-07-01T01:30:00.000Z",
+      costBasis: 1_400,
+      alertAbove: 1_600,
+      alertBelow: 1_300,
+    });
+    expect(reset).toMatchObject({ alertAbove: 1_600, alertAboveFiredAt: null, alertBelowFiredAt: null });
+    const stopped = database.createPosition({
+      symbol: "00700.HK",
+      quantity: 10,
+      purchasedAt: "2026-07-01T01:30:00.000Z",
+      costBasis: 300,
+      atr: 8,
+      atrStopLoss: 360,
+    });
+    const edited = database.updatePosition(stopped.id, {
+      symbol: "00700.HK",
+      quantity: 20,
+      purchasedAt: "2026-07-01T01:30:00.000Z",
+      costBasis: 310,
+      atr: 99,
+      atrStopLoss: 1,
+    });
+    expect(edited).toMatchObject({ quantity: 20, costBasis: 310, atr: 8, atrStopLoss: 360 });
+    expect(database.listPositions()).toHaveLength(2);
     expect(database.deletePosition(created.id)).toBe(true);
+    expect(database.deletePosition(stopped.id)).toBe(true);
     expect(database.listPositions()).toEqual([]);
     database.close();
+  });
+
+  it("adds price-alert and ATR columns when opening an older database", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "livermore-portfolio-migrate-"));
+    const filename = path.join(directory, "legacy.db");
+    const raw = new DatabaseSync(filename);
+    raw.exec(`
+      CREATE TABLE portfolio_positions (
+        id TEXT PRIMARY KEY, symbol TEXT NOT NULL, quantity REAL NOT NULL,
+        purchased_at TEXT NOT NULL, cost_basis REAL NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE position_risk_checks (
+        id TEXT PRIMARY KEY, run_id TEXT NOT NULL, position_id TEXT NOT NULL,
+        checked_at TEXT NOT NULL, name TEXT, current_price REAL, pnl_pct REAL, day_change_pct REAL,
+        main_net_inflow REAL, severity TEXT NOT NULL, risk_summary TEXT NOT NULL,
+        signals_json TEXT NOT NULL, raw_data_json TEXT NOT NULL, alerted_at TEXT
+      );
+    `);
+    raw.close();
+    const database = new InvestmentDatabase(filename);
+    try {
+      const created = database.createPosition({
+        symbol: "600519.SH",
+        quantity: 10,
+        purchasedAt: "2026-07-01T01:30:00.000Z",
+        costBasis: 1400,
+        alertAbove: 1600,
+        alertBelow: 1200,
+      });
+      expect(created).toMatchObject({ alertAbove: 1600, alertBelow: 1200, atrStopLoss: null });
+    } finally {
+      database.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("joins the latest risk snapshot into a position", () => {
@@ -134,12 +212,18 @@ describe("portfolio risk policy", () => {
       quantity: 400,
       purchasedAt: "2026-07-01T01:30:00.000Z",
       costBasis: 102,
+      alertAbove: null,
+      alertBelow: null,
+      alertAboveFiredAt: null,
+      alertBelowFiredAt: null,
       createdAt: "2026-07-01T01:30:00.000Z",
       updatedAt: "2026-07-01T01:30:00.000Z",
       latestName: null,
       latestPrice: null,
       pnlPct: null,
       dayChangePct: null,
+      atr: null,
+      atrStopLoss: null,
       severity: null,
       riskSummary: null,
       lastCheckedAt: null,
@@ -197,6 +281,8 @@ describe("portfolio risk policy", () => {
       quantity: 1_000,
       purchasedAt: "2026-07-01T01:30:00.000Z",
       costBasis: 12,
+      atr: 0.5,
+      atrStopLoss: 9.5,
     });
     const config = loadConfig({ TRACING_ENABLED: "false", MACOS_NOTIFICATIONS_ENABLED: "false" });
     const telemetry = Telemetry.create(config);
@@ -220,7 +306,9 @@ describe("portfolio risk policy", () => {
               dayChangePct: -4.5,
               rsi: 35,
               macd: -0.12,
-              raw: { klineCount: 80 },
+              atr: 0.42,
+              atrStopLoss: 9.96,
+              raw: { klineCount: 120 },
             }],
           }],
           fundFlowResults: [{
@@ -262,10 +350,15 @@ describe("portfolio risk policy", () => {
       expect(database.listPositions()[0]).toMatchObject({
         latestName: "平安银行",
         latestPrice: 10.8,
+        atr: 0.5,
+        atrStopLoss: 9.5,
         severity: "critical",
       });
       const report = await readFile(result.reportPath, "utf8");
       expect(report).toContain("Agent 辅助研判");
+      expect(report).toContain("ATR止损");
+      expect(report).toContain("9.50");
+      expect(report).not.toContain("9.96");
       expect(report).not.toContain("99.99");
     } finally {
       await telemetry.shutdown();
@@ -338,6 +431,81 @@ describe("portfolio risk policy", () => {
         latestPrice: 10.2,
         severity: "normal",
       });
+    } finally {
+      await telemetry.shutdown();
+      database.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("sends a price alert once until the price returns inside the band", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "livermore-price-alert-"));
+    const database = new InvestmentDatabase(":memory:");
+    database.createPosition({
+      symbol: "000001.SZ",
+      quantity: 100,
+      purchasedAt: "2026-07-01T01:30:00.000Z",
+      costBasis: 12,
+      alertBelow: 11,
+    });
+    const config = loadConfig({ TRACING_ENABLED: "false", MACOS_NOTIFICATIONS_ENABLED: "false" });
+    const telemetry = Telemetry.create(config);
+    const quote = (currentPrice: number) => ({
+      analysis: "价格已进入下跌预警区间，需人工复核。",
+      futuResults: [{
+        source: "futuapi" as const,
+        rows: [{
+          requestedSymbol: "000001.SZ",
+          symbol: "000001.SZ",
+          name: "平安银行",
+          currentPrice,
+          dayChangePct: -1,
+          raw: { klineCount: 120 },
+        }],
+      }],
+      fundFlowResults: [],
+      usage: {
+        inputTokens: 10,
+        outputTokens: 10,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 0,
+        cost: 0,
+        costCurrency: "CNY",
+      },
+      skillReadCount: 1,
+      futuQueryCount: 1,
+      newsQueryCount: 1,
+      fundFlowQueryCount: 0,
+    });
+    try {
+      await runPortfolioRiskCheck({
+        config, database, telemetry, reportDirectory: directory, force: true,
+        now: new Date("2026-07-24T02:30:00.000Z"),
+        runAgent: async () => quote(10.8),
+      });
+      await runPortfolioRiskCheck({
+        config, database, telemetry, reportDirectory: directory, force: true,
+        now: new Date("2026-07-24T03:30:00.000Z"),
+        runAgent: async () => quote(10.5),
+      });
+      const firstTitles = database.listAlerts().map((item) => item.title);
+      expect(firstTitles.filter((title) => title.startsWith("Livermore 价格预警"))).toEqual(["Livermore 价格预警：1 项触发"]);
+      expect(database.listAlerts().find((item) => item.title.startsWith("Livermore 价格预警"))?.body).toContain("下跌触及预警价 11.00");
+      expect(database.listPositions()[0]?.alertBelowFiredAt).toBe("2026-07-24T02:30:00.000Z");
+
+      await runPortfolioRiskCheck({
+        config, database, telemetry, reportDirectory: directory, force: true,
+        now: new Date("2026-07-24T04:30:00.000Z"),
+        runAgent: async () => quote(11.4),
+      });
+      expect(database.listPositions()[0]?.alertBelowFiredAt).toBeNull();
+      await runPortfolioRiskCheck({
+        config, database, telemetry, reportDirectory: directory, force: true,
+        now: new Date("2026-07-24T05:30:00.000Z"),
+        runAgent: async () => quote(10.9),
+      });
+      expect(database.listAlerts().filter((item) => item.title.startsWith("Livermore 价格预警"))).toHaveLength(2);
     } finally {
       await telemetry.shutdown();
       database.close();

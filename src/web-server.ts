@@ -17,6 +17,9 @@ import { getTaskSettings, isTaskName, saveTaskSettings, scheduleDescription, tas
 import { notificationPreview } from "./notifications/macos-channel.js";
 import { createCustomResearchTask, defaultTaskSettings, isBuiltinTaskName, listTaskNames, modesForTask, titleForTask } from "./tasks/task-settings.js";
 import { ChatSessionError, PersistentChatSessions, visibleChatMessages } from "./chat/persistent-sessions.js";
+import { entryAtrStop } from "./portfolio/entry-stop.js";
+import { refreshMcpServerTools } from "./mcp/agent-tools.js";
+import { createMcpServer, deleteMcpServer, McpConfigError, toPublicMcp, updateMcpServer, resolveBriefingMcp } from "./mcp/registry.js";
 
 const config = loadConfig();
 const database = new InvestmentDatabase(databasePath);
@@ -31,7 +34,7 @@ const server = createServer(async (request, response) => {
       sendSse(response, "error", { message: error instanceof Error ? error.message : String(error) });
       response.end();
     } else {
-      sendJson(response, error instanceof TaskSettingsError || error instanceof ChatSessionError ? error.statusCode : 500, { error: error instanceof Error ? error.message : String(error) });
+      sendJson(response, error instanceof TaskSettingsError || error instanceof ChatSessionError || error instanceof McpConfigError ? error.statusCode : 500, { error: error instanceof Error ? error.message : String(error) });
     }
   }
 });
@@ -82,7 +85,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       agent: {
         provider: config.provider,
         model: config.model,
-        tavily: config.tavilyMcpEnabled && Boolean(config.tavilyApiKey),
+        tavily: resolveBriefingMcp(database.listMcpServers()).state === "ready",
         skillCount: capabilities.skills.length,
         mcpCount: capabilities.mcps.filter((item) => item.status === "configured").length,
         toolCount: capabilities.tools.length,
@@ -126,11 +129,35 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     else sendJson(response, 405, { error: "Method not allowed." });
   } else if (request.method === "GET" && url.pathname === "/api/capabilities") {
     sendJson(response, 200, await capabilitySnapshot(url.searchParams.get("refresh") === "true"));
+  } else if (url.pathname === "/api/mcp" && request.method === "POST") {
+    const created = createMcpServer(database, await readJsonBody(request));
+    sessions.dropIdleAgents();
+    sendJson(response, 201, toPublicMcp(created));
+  } else if (url.pathname.startsWith("/api/mcp/")) {
+    const [id, action] = url.pathname.slice("/api/mcp/".length).split("/");
+    if (!id || action && action !== "refresh") return sendJson(response, 404, { error: "Not found." });
+    if (request.method === "DELETE" && !action) {
+      deleteMcpServer(database, decodeURIComponent(id));
+      sessions.dropIdleAgents();
+      return sendJson(response, 200, { deleted: true });
+    }
+    if (request.method === "PATCH" && !action) {
+      const updated = updateMcpServer(database, decodeURIComponent(id), await readJsonBody(request));
+      sessions.dropIdleAgents();
+      return sendJson(response, 200, toPublicMcp(updated));
+    }
+    if (request.method === "POST" && action === "refresh") {
+      const updated = await refreshMcpServerTools(database, decodeURIComponent(id));
+      sessions.dropIdleAgents();
+      return sendJson(response, 200, toPublicMcp(updated));
+    }
+    sendJson(response, 405, { error: "Method not allowed." });
   } else if (request.method === "GET" && url.pathname === "/api/portfolio") {
     sendJson(response, 200, { positions: database.listPositions() });
   } else if (request.method === "POST" && url.pathname === "/api/portfolio") {
     const input = parsePositionInput(await readJsonBody(request));
-    sendJson(response, 201, database.createPosition(input));
+    const stop = await entryAtrStop(config, input.symbol);
+    sendJson(response, 201, database.createPosition({ ...input, ...stop }));
   } else if (request.method === "PUT" && url.pathname.startsWith("/api/portfolio/")) {
     const id = decodeURIComponent(url.pathname.slice("/api/portfolio/".length));
     const updated = database.updatePosition(id, parsePositionInput(await readJsonBody(request)));
@@ -253,7 +280,7 @@ async function capabilitySnapshot(refresh = false) {
   return {
     semantics: {
       skills: "仅列出 Livermore 项目 skills/ 目录中的技能，调用时按需读取。",
-      mcps: "仅列出 Livermore 运行时实际配置的 MCP，不包含 Codex 桌面环境的 MCP。",
+      mcps: "Livermore 运行时已登记的 MCP。",
     },
     skills: skills.map(({ name, description, location }) => ({
       name,
@@ -262,15 +289,7 @@ async function capabilitySnapshot(refresh = false) {
       loading: "on-demand",
       status: "loadable",
     })),
-    mcps: [{
-      name: "Tavily Search",
-      transport: "HTTP MCP",
-      endpoint: config.tavilyMcpUrl,
-      status: !config.tavilyMcpEnabled
-        ? "disabled"
-        : config.tavilyApiKey ? "configured" : "needs-configuration",
-      description: "交互研究和日报使用的实时网页搜索。",
-    }],
+    mcps: database.listMcpServers().map(toPublicMcp),
     connections: [
       {
         name: "Feishu Agent Bot",
@@ -332,7 +351,21 @@ function parsePositionInput(value: unknown): PortfolioPositionInput {
   if (!purchasedAt || Number.isNaN(parsedDate.getTime()) || parsedDate.getTime() > Date.now() + 60_000) {
     throw new Error("买入时间无效，且不能晚于当前时间。");
   }
-  return { symbol, quantity, costBasis, purchasedAt: parsedDate.toISOString() };
+  const alertAbove = parseOptionalAlertPrice(input.alertAbove, "上涨预警价");
+  const alertBelow = parseOptionalAlertPrice(input.alertBelow, "下跌预警价");
+  if (alertAbove !== null && alertBelow !== null && alertAbove <= alertBelow) {
+    throw new Error("上涨预警价必须高于下跌预警价。");
+  }
+  return { symbol, quantity, costBasis, purchasedAt: parsedDate.toISOString(), alertAbove, alertBelow };
+}
+
+function parseOptionalAlertPrice(value: unknown, label: string): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100_000_000) {
+    throw new Error(`${label}必须是大于 0 的有效数字。`);
+  }
+  return parsed;
 }
 
 async function serveStatic(pathname: string, response: ServerResponse): Promise<void> {

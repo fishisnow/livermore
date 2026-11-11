@@ -36,6 +36,7 @@ const elements = {
   capabilityDialog: document.querySelector("#capability-dialog"),
   skillLedger: document.querySelector("#skill-ledger"),
   mcpLedger: document.querySelector("#mcp-ledger"),
+  mcpForm: document.querySelector("#mcp-form"),
   connectionLedger: document.querySelector("#connection-ledger"),
   toolLedger: document.querySelector("#tool-ledger"),
   toast: document.querySelector("#toast"),
@@ -197,6 +198,11 @@ document.querySelector("#run-portfolio-check").addEventListener("click", runPort
 document.querySelector("#capability-details").addEventListener("click", () => openCapabilities(true));
 document.querySelector("#close-capability-dialog").addEventListener("click", () => setView("chat"));
 document.querySelector("#refresh-capabilities").addEventListener("click", () => openCapabilities(true));
+document.querySelector("#add-mcp").addEventListener("click", () => openMcpForm());
+document.querySelector("#cancel-mcp").addEventListener("click", closeMcpForm);
+elements.mcpForm.addEventListener("submit", saveMcp);
+elements.mcpLedger.addEventListener("change", onMcpChange);
+elements.mcpLedger.addEventListener("click", onMcpClick);
 elements.traceLookup.addEventListener("submit", openTraceById);
 
 loadDashboard();
@@ -518,6 +524,8 @@ function renderPortfolio(positions) {
       <td data-label="数量">${formatQuantity(position.quantity)}</td>
       <td data-label="成本">${formatPrice(position.costBasis)}</td>
       <td data-label="最新价">${position.latestPrice == null ? "—" : formatPrice(position.latestPrice)}</td>
+      <td data-label="ATR止损">${renderAtrStop(position)}</td>
+      <td data-label="价格预警">${renderPriceAlerts(position)}</td>
       <td data-label="持仓盈亏" class="${changeClass(position.pnlPct)}">${formatChange(position.pnlPct)}</td>
       <td data-label="当日" class="${changeClass(position.dayChangePct)}">${formatChange(position.dayChangePct)}</td>
       <td data-label="风险状态">
@@ -551,7 +559,12 @@ async function savePosition(event) {
       quantity: Number(document.querySelector("#position-quantity").value),
       purchasedAt: purchasedAt.toISOString(),
       costBasis: Number(document.querySelector("#position-cost").value),
+      alertAbove: optionalAlertPrice("#position-alert-above"),
+      alertBelow: optionalAlertPrice("#position-alert-below"),
     };
+    if (payload.alertAbove != null && payload.alertBelow != null && payload.alertAbove <= payload.alertBelow) {
+      throw new Error("上涨预警价必须高于下跌预警价");
+    }
     const response = await fetch(id ? `/api/portfolio/${encodeURIComponent(id)}` : "/api/portfolio", {
       method: id ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
@@ -577,6 +590,8 @@ function editPosition(id) {
   document.querySelector("#position-quantity").value = String(position.quantity);
   document.querySelector("#position-purchased-at").value = toDateTimeLocal(new Date(position.purchasedAt));
   document.querySelector("#position-cost").value = String(position.costBasis);
+  document.querySelector("#position-alert-above").value = position.alertAbove ?? "";
+  document.querySelector("#position-alert-below").value = position.alertBelow ?? "";
   document.querySelector("#save-position").textContent = "保存修改";
   document.querySelector("#cancel-position-edit").hidden = false;
   document.querySelector("#position-symbol").focus();
@@ -659,18 +674,15 @@ function renderCapabilities(data) {
   elements.skillLedger.innerHTML = data.skills.length
     ? data.skills.map((skill) => ledgerItem(skill, [
       ["位置", skill.location],
-      ["加载", skill.loading === "on-demand" ? "按需读取" : skill.loading],
     ])).join("")
     : `<div class="ledger-empty">
-        <strong>尚未安装 Livermore 专属 Skill</strong>
-        <p>技能应安装到项目的 <code>skills/</code> 目录。全局 Codex Skills 不会出现在这里。</p>
+        <strong>尚未安装 Skill</strong>
         <code class="install-command">livermore skill install futuapi</code>
       </div>`;
 
-  elements.mcpLedger.innerHTML = data.mcps.map((mcp) => ledgerItem(mcp, [
-    ["传输", mcp.transport],
-    ["地址", mcp.endpoint],
-  ])).join("");
+  elements.mcpLedger.innerHTML = data.mcps.length
+    ? data.mcps.map(renderMcp).join("")
+    : `<div class="ledger-empty"><strong>还没有 MCP</strong></div>`;
   elements.connectionLedger.innerHTML = data.connections.map((connection) => ledgerItem(connection, [
     ["类型", connection.kind],
     ["地址", connection.endpoint],
@@ -678,6 +690,213 @@ function renderCapabilities(data) {
   elements.toolLedger.innerHTML = data.tools.map((tool) => ledgerItem(tool, [
     ["工具名", tool.name],
   ])).join("");
+}
+
+function renderMcp(mcp) {
+  const tools = mcp.tools?.length
+    ? `<p class="mcp-tool-summary">${escapeHtml(mcp.tools.map((tool) => tool.name).join(" · "))}</p>`
+    : "";
+  const deleteButton = mcp.system
+    ? ""
+    : `<button class="secondary-action mcp-delete" type="button" data-mcp-delete="${escapeHtml(mcp.id)}">删除</button>`;
+  return `<article class="ledger-item mcp-card" data-mcp-id="${escapeHtml(mcp.id)}" data-mcp-system="${mcp.system ? "true" : "false"}">
+    <div class="ledger-item-head">
+      <strong>${escapeHtml(mcp.name)}</strong>
+      <span class="ledger-status ${escapeHtml(mcp.status)}">${capabilityStatus(mcp.status)}</span>
+    </div>
+    ${mcp.description ? `<p>${escapeHtml(mcp.description)}</p>` : ""}
+    <dl>
+      <div><dt>地址</dt><dd>${escapeHtml(mcp.endpoint)}</dd></div>
+      <div><dt>密钥</dt><dd>${mcp.hasApiKey ? "已保存" : "未填写"}</dd></div>
+    </dl>
+    ${mcp.lastError ? `<p class="mcp-error">${escapeHtml(mcp.lastError)}</p>` : ""}
+    ${tools}
+    <div class="mcp-card-actions">
+      <label class="mcp-switch"><input type="checkbox" data-mcp-toggle="${escapeHtml(mcp.id)}" ${mcp.enabled ? "checked" : ""}><span>${mcp.enabled ? "开启" : "关闭"}</span></label>
+      <button class="secondary-action" type="button" data-mcp-refresh="${escapeHtml(mcp.id)}">检测</button>
+      <button class="secondary-action" type="button" data-mcp-edit="${escapeHtml(mcp.id)}">配置</button>
+      ${deleteButton}
+    </div>
+  </article>`;
+}
+
+function openMcpForm(mcp) {
+  elements.mcpForm.hidden = false;
+  document.querySelector("#add-mcp").hidden = true;
+  const idField = document.querySelector("#mcp-id");
+  const modeField = document.querySelector("#mcp-mode");
+  const apiField = document.querySelector("#mcp-api-key-field");
+  const jsonField = document.querySelector("#mcp-json-field");
+  const title = document.querySelector("#mcp-form-title");
+  idField.value = mcp?.id || "";
+  document.querySelector("#mcp-api-key").value = "";
+  if (!mcp) {
+    modeField.value = "create-json";
+    apiField.hidden = true;
+    jsonField.hidden = false;
+    title.textContent = "添加 MCP";
+    document.querySelector("#mcp-json").value = JSON.stringify({
+      name: "Example MCP",
+      url: "https://mcp.example.com/mcp/",
+      description: "",
+      authQueryParam: null,
+      apiKey: "",
+    }, null, 2);
+    elements.mcpForm.querySelector("button[type=submit]").textContent = "添加";
+    elements.mcpForm.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    return;
+  }
+  if (mcp.system) {
+    modeField.value = "tavily-key";
+    apiField.hidden = false;
+    jsonField.hidden = true;
+    title.textContent = mcp.name;
+    document.querySelector("#mcp-api-key").placeholder = mcp.hasApiKey ? "已保存，输入新值可覆盖" : "API Key";
+    elements.mcpForm.querySelector("button[type=submit]").textContent = "保存";
+    elements.mcpForm.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    return;
+  }
+  modeField.value = "edit-json";
+  apiField.hidden = true;
+  jsonField.hidden = false;
+  title.textContent = mcp.name;
+  document.querySelector("#mcp-json").value = JSON.stringify({
+    ...mcp.config,
+    apiKey: "",
+  }, null, 2);
+  elements.mcpForm.querySelector("button[type=submit]").textContent = "保存";
+  elements.mcpForm.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function closeMcpForm() {
+  elements.mcpForm.hidden = true;
+  elements.mcpForm.reset();
+  document.querySelector("#mcp-api-key-field").hidden = false;
+  document.querySelector("#mcp-json-field").hidden = true;
+  document.querySelector("#add-mcp").hidden = false;
+}
+
+async function saveMcp(event) {
+  event.preventDefault();
+  const id = document.querySelector("#mcp-id").value;
+  const mode = document.querySelector("#mcp-mode").value;
+  try {
+    let body;
+    if (mode === "tavily-key") {
+      const apiKey = document.querySelector("#mcp-api-key").value.trim();
+      if (!apiKey) throw new Error("请填写 Tavily API Key。");
+      body = { apiKey };
+    } else {
+      body = JSON.parse(document.querySelector("#mcp-json").value);
+      if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("JSON 必须是对象。");
+    }
+    const response = await fetch(id ? `/api/mcp/${encodeURIComponent(id)}` : "/api/mcp", {
+      method: id ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    closeMcpForm();
+    showToast(id ? "MCP 已更新" : "MCP 已添加");
+    await reloadCapabilities();
+    if (!id || mode === "tavily-key") {
+      const targetId = id || payload.id;
+      const refreshed = await fetch(`/api/mcp/${encodeURIComponent(targetId)}/refresh`, { method: "POST" });
+      if (!refreshed.ok) {
+        const failure = await refreshed.json().catch(() => ({}));
+        showToast(failure.error || "已保存，工具检测失败");
+      }
+      await reloadCapabilities();
+    }
+    loadDashboard();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function onMcpChange(event) {
+  const toggle = event.target.closest("[data-mcp-toggle]");
+  if (!toggle) return;
+  try {
+    await patchMcp(toggle.dataset.mcpToggle, { enabled: toggle.checked });
+    if (toggle.checked) {
+      const refreshed = await fetch(`/api/mcp/${encodeURIComponent(toggle.dataset.mcpToggle)}/refresh`, { method: "POST" });
+      const payload = await refreshed.json().catch(() => ({}));
+      if (!refreshed.ok) showToast(payload.error || "已开启，但工具检测失败");
+      else showToast(payload.tools?.length ? `MCP 已开启，检测到 ${payload.tools.length} 个工具` : "MCP 已开启");
+    } else {
+      showToast("MCP 已关闭");
+    }
+    await reloadCapabilities();
+    loadDashboard();
+  } catch (error) {
+    showToast(error.message);
+    await reloadCapabilities();
+  }
+}
+
+async function onMcpClick(event) {
+  if (event.target.closest("[data-mcp-toggle], .mcp-card-actions label, .mcp-switch")) return;
+  const refresh = event.target.closest("[data-mcp-refresh]");
+  const edit = event.target.closest("[data-mcp-edit]");
+  const remove = event.target.closest("[data-mcp-delete]");
+  const card = event.target.closest("[data-mcp-id]");
+  const id = card?.dataset.mcpId;
+  if (!id) return;
+  if (!refresh && !edit && !remove) {
+    if (card.dataset.mcpSystem === "true") return;
+    await openMcpEditor(id);
+    return;
+  }
+  try {
+    if (refresh) {
+      const response = await fetch(`/api/mcp/${encodeURIComponent(id)}/refresh`, { method: "POST" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      showToast(payload.tools?.length ? `已检测到 ${payload.tools.length} 个工具` : "没有检测到工具");
+    } else if (remove) {
+      const name = card.querySelector("strong")?.childNodes[0]?.textContent?.trim() || "这个 MCP";
+      if (!confirm(`删除 MCP「${name}」？`)) return;
+      const response = await fetch(`/api/mcp/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      showToast("MCP 已删除");
+    } else if (edit) {
+      await openMcpEditor(id);
+      return;
+    }
+    await reloadCapabilities();
+    loadDashboard();
+  } catch (error) {
+    showToast(error.message);
+    await reloadCapabilities();
+  }
+}
+
+async function openMcpEditor(id) {
+  const response = await fetch("/api/capabilities");
+  const data = await response.json();
+  const mcp = data.mcps.find((item) => item.id === id);
+  if (!mcp) throw new Error("MCP 不存在。");
+  openMcpForm(mcp);
+}
+
+async function patchMcp(id, body) {
+  const response = await fetch(`/api/mcp/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+  return payload;
+}
+
+async function reloadCapabilities() {
+  const response = await fetch("/api/capabilities");
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  renderCapabilities(await response.json());
 }
 
 function ledgerItem(item, metadata) {
@@ -1106,6 +1325,31 @@ function formatQuantity(value) {
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 4 }).format(value);
 }
 
+function renderAtrStop(position) {
+  return position.atrStopLoss == null ? "—" : formatPrice(position.atrStopLoss);
+}
+
+function renderPriceAlerts(position) {
+  const rows = [];
+  if (position.alertAbove != null) {
+    const hit = position.latestPrice != null && position.latestPrice >= position.alertAbove;
+    rows.push(`<small class="${hit ? "alert-hit" : ""}">上涨至 ${formatPrice(position.alertAbove)}${hit ? " · 已触发" : ""}</small>`);
+  }
+  if (position.alertBelow != null) {
+    const hit = position.latestPrice != null && position.latestPrice <= position.alertBelow;
+    rows.push(`<small class="${hit ? "alert-hit" : ""}">下跌至 ${formatPrice(position.alertBelow)}${hit ? " · 已触发" : ""}</small>`);
+  }
+  return rows.length > 0 ? rows.join("") : `<small>未设置</small>`;
+}
+
+function optionalAlertPrice(selector) {
+  const raw = document.querySelector(selector).value.trim();
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) throw new Error("预警价必须是大于 0 的数字");
+  return value;
+}
+
 function formatPrice(value) {
   return new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value);
 }
@@ -1128,7 +1372,6 @@ function toolLabel(name) {
   return ({
     list_task_runs: "正在读取任务运行记录",
     get_task_run: "正在读取任务报告",
-    search_investment_web: "正在通过 Tavily MCP 搜索",
     query_a_share_main_fund_flow: "正在查询东方财富主力资金",
     query_futu_market: "正在查询 Futu 行情",
     query_futu_news: "正在查询 Futu 资讯",

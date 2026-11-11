@@ -23,6 +23,7 @@
     "feishu": "node --import tsx src/feishu-bot-cli.ts",
     "install:local": "node bin/install.mjs",
     "desktop:build": "node desktop/build-macos.mjs",
+    "desktop:update": "node desktop/update-local.mjs",
     "desktop:open": "open release/macos.noindex/Livermore.app",
     "desktop:verify": "node desktop/verify.mjs",
     "desktop:verify-gui": "node desktop/verify-gui.mjs",

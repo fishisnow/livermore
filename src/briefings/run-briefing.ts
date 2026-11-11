@@ -12,6 +12,7 @@ import { createInvestmentAgent } from "../agent/create-investment-agent.js";
 import { collectDirectSources } from "./direct-source-provider.js";
 import { evaluateBriefing, type EvaluationResult } from "./evaluation.js";
 import { collectLiveSources, loadReplaySources } from "./source-provider.js";
+import { resolveBriefingMcp } from "../mcp/registry.js";
 import { taskDefinitions } from "./task-definitions.js";
 import type { BriefingMode, BriefingTask, SourceItem } from "./types.js";
 import { getTaskSettings, renderBriefingPrompt } from "../tasks/task-settings.js";
@@ -99,7 +100,7 @@ export async function runBriefing(options: RunBriefingOptions): Promise<RunBrief
       }, async (span) => {
         const collected = options.replayPath
           ? { sources: await loadReplaySources(options.replayPath, options.task), warnings: [] }
-          : await collectLive(options, definition, now, telemetry);
+          : await collectLive(options, definition, now, telemetry, database);
         span.setAttribute("livermore.source.count", collected.sources.length);
         span.setAttribute("livermore.warning.count", collected.warnings.length);
         return collected;
@@ -219,27 +220,31 @@ async function collectLive(
   definition: (typeof taskDefinitions)[BriefingTask],
   now: Date,
   telemetry: Telemetry,
+  database: InvestmentDatabase,
 ) {
   const warnings: string[] = [];
   let mcpSources: SourceItem[] = [];
-  if (options.config.tavilyMcpEnabled && options.config.tavilyApiKey) {
+  const briefingMcp = resolveBriefingMcp(database.listMcpServers());
+  if (briefingMcp.state === "ready") {
     try {
       mcpSources = await telemetry.withSpan("tavily.mcp.search", {
         "openinference.span.kind": "TOOL",
       }, async () => collectLiveSources(
         definition,
-        options.config.tavilyMcpUrl,
-        options.config.tavilyApiKey!,
+        briefingMcp.endpoint,
+        briefingMcp.apiKey,
         options.config.searchMaxResults,
         now,
       ));
     } catch (error) {
       warnings.push(`Tavily MCP unavailable: ${error instanceof Error ? error.message : String(error)}`);
     }
-  } else if (!options.config.tavilyMcpEnabled) {
+  } else if (briefingMcp.state === "disabled") {
     warnings.push("Tavily MCP is disabled; using direct web sources only.");
-  } else {
+  } else if (briefingMcp.state === "missing-key") {
     warnings.push("TAVILY_API_KEY is not configured; using direct web sources only.");
+  } else {
+    warnings.push("Tavily MCP is not configured; using direct web sources only.");
   }
 
   const direct = await telemetry.withSpan("source.direct.fetch", {
