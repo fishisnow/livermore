@@ -9,6 +9,7 @@
       const preference = localStorage.getItem("livermore.appearance") || "system";
       document.documentElement.dataset.theme = preference === "system"
         ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : preference;
+      document.documentElement.dataset.moyu = localStorage.getItem("livermore.moyu") === "on" ? "on" : "off";
     } catch { /* Use the system default if storage is unavailable. */ }
   </script>
   <title>Livermore · 本地投资 Agent</title>
@@ -25,8 +26,10 @@
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1"/></symbol>
     <symbol id="i-gear" viewBox="0 0 24 24"><path d="m9 3-1 3-3 1-2 3 2 2-1 3 2 3h3l2 3h3l1-3 3-1 2-3-2-2 1-3-2-3h-3l-2-3Z"/><circle cx="11.5" cy="12" r="3"/></symbol>
+    <symbol id="i-fish" viewBox="0 0 24 24"><path d="M3 12c2.4-4 6.4-6.2 10.4-5.4 1.7.3 3.3 1.3 4.4 2.6L21 6.5v11l-3.2-2.7c-1.1 1.3-2.7 2.3-4.4 2.6C9.4 18.2 5.4 16 3 12Z"/><path d="M15.2 11.4h.01"/></symbol>
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
     <symbol id="i-trace" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
+    <symbol id="i-panels" viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="10" width="8" height="11" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/></symbol>
   </defs></svg>
   <div class="app-frame">
     <aside class="sidebar" aria-label="主导航">
@@ -37,14 +40,19 @@
         <button class="nav-item selected" data-view-target="chat" type="button" aria-current="page" title="研究对话"><svg class="icon"><use href="#i-chat"/></svg><span>研究对话</span></button>
         <button class="nav-item" data-view-target="portfolio" type="button" title="我的持仓"><svg class="icon"><use href="#i-chart"/></svg><span>我的持仓</span><span class="nav-count" id="nav-position-count">—</span></button>
         <button class="nav-item" data-view-target="tasks" type="button" title="定时任务"><svg class="icon"><use href="#i-tasks"/></svg><span>定时任务</span><span class="nav-count" id="nav-task-count">3</span></button>
+        <button class="nav-item" data-view-target="charts" type="button" title="图表"><svg class="icon"><use href="#i-panels"/></svg><span>图表</span></button>
         <button class="nav-item" data-view-target="capabilities" type="button" title="研究能力"><svg class="icon"><use href="#i-grid"/></svg><span>研究能力</span></button>
+        <a class="nav-item" id="trace-link" href="http://localhost:6006" target="_blank" rel="noreferrer" title="打开 Trace 观测台"><svg class="icon"><use href="#i-trace"/></svg><span>Trace 观测</span><span class="nav-external" aria-hidden="true">↗</span></a>
       </nav>
       <section class="chat-history" aria-label="历史会话"><div class="section-label"><span>历史会话</span><button id="refresh-chats" type="button" aria-label="刷新历史会话">↻</button></div><div id="chat-history-list"></div><button id="more-chats" type="button" hidden>加载更早会话</button></section>
-      <div class="sidebar-note"><span class="live-dot"></span><span>本地工作区<span>数据保存在这台 Mac</span></span></div>
       <div class="sidebar-bottom">
+        <div class="workspace-status">
+          <span class="live-dot" aria-hidden="true"></span>
+          <span><strong>本地工作区</strong><small>数据保存在这台 Mac</small></span>
+        </div>
         <label class="appearance-control" for="appearance"><svg class="icon"><use href="#i-sun"/></svg><span>外观</span><select id="appearance" aria-label="应用外观"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
+        <button class="nav-item" id="moyu-mode" type="button" aria-pressed="false" title="摸鱼模式"><svg class="icon"><use href="#i-fish"/></svg><span>摸鱼模式</span></button>
         <button class="nav-item native-only" id="native-settings" type="button" title="设置"><svg class="icon"><use href="#i-gear"/></svg><span>设置</span><kbd>⌘,</kbd></button>
-        <span class="sidebar-version">LIVERMORE · LOCAL AGENT</span>
       </div>
     </aside>
     <header class="topbar">
@@ -131,26 +139,11 @@
             <button id="capability-details" type="button">查看能力账本</button>
           </div>
           <div class="capabilities" id="capabilities"></div>
-          <form class="trace-lookup" id="trace-lookup">
-            <label for="trace-id">按 Trace ID 定位</label>
-            <div>
-              <input
-                id="trace-id"
-                name="traceId"
-                inputmode="text"
-                autocomplete="off"
-                spellcheck="false"
-                maxlength="34"
-                placeholder="粘贴 32 位 Trace ID"
-                required
-              >
-              <button type="submit">打开</button>
-            </div>
-          </form>
-          <a class="trace-link" id="trace-link" href="http://localhost:6006" target="_blank" rel="noreferrer">
-            打开 Trace 观测台 <span aria-hidden="true">↗</span>
-          </a>
         </section>
+      </section>
+
+      <section class="charts-page" aria-label="图表">
+        <div class="chart-grid" id="chart-grid"></div>
       </section>
     </main>
   </div>
@@ -184,7 +177,7 @@
           <p class="editor-note">关闭后仍可手动运行。保存后新计划自动生效，不会改变正在运行的任务。</p>
           <label class="editor-label" for="task-timezone">时区</label><input id="task-timezone" type="text" maxlength="80" required placeholder="Asia/Shanghai">
           <fieldset class="weekday-picker"><legend>运行日</legend><div id="task-weekdays"></div></fieldset>
-          <div class="section-label"><span>运行时间与模式</span><button id="add-task-time" type="button">＋ 添加时间</button></div>
+          <div class="section-label"><span id="task-times-label">运行时间与模式</span><button id="add-task-time" type="button">＋ 添加时间</button></div>
           <div id="task-times"></div>
           <p class="editor-note">电脑需处于开机状态。关闭应用后继续运行，请在 Agent 菜单启用后台定时任务。默认工作日不自动排除交易所节假日。</p>
         </section>

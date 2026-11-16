@@ -40,8 +40,6 @@ const elements = {
   toolLedger: document.querySelector("#tool-ledger"),
   toast: document.querySelector("#toast"),
   traceLink: document.querySelector("#trace-link"),
-  traceLookup: document.querySelector("#trace-lookup"),
-  traceId: document.querySelector("#trace-id"),
   notifications: document.querySelector("#notification-list"),
   notificationDialog: document.querySelector("#notification-dialog"),
   taskConfigDialog: document.querySelector("#task-config-dialog"),
@@ -62,6 +60,14 @@ function setAppearance(value) {
 systemAppearance.addEventListener("change", () => { if (appearance === "system") setAppearance("system"); });
 document.querySelector("#appearance").addEventListener("change", (event) => setAppearance(event.target.value));
 setAppearance(appearance);
+function setMoyu(enabled) {
+  document.documentElement.dataset.moyu = enabled ? "on" : "off";
+  localStorage.setItem("livermore.moyu", enabled ? "on" : "off");
+  const button = document.querySelector("#moyu-mode");
+  button.setAttribute("aria-pressed", String(enabled));
+}
+document.querySelector("#moyu-mode").addEventListener("click", () => setMoyu(document.documentElement.dataset.moyu !== "on"));
+setMoyu(localStorage.getItem("livermore.moyu") === "on");
 document.body.dataset.sidebar = localStorage.getItem("livermore.sidebar") || "expanded";
 document.body.dataset.inspector = localStorage.getItem("livermore.inspector") || "auto";
 const compactWindow = matchMedia("(max-width: 1180px)");
@@ -92,8 +98,10 @@ const views = {
   chat: ["研究对话", "与你的本地投资 Agent 一起研究"],
   portfolio: ["我的持仓", "持仓维护 · 风险监测 · 操作建议"],
   tasks: ["定时任务", "选择任务后，只显示该任务的运行记录"],
+  charts: ["", ""],
   capabilities: ["研究能力", "已安装的 Skills、MCP 与数据连接"],
 };
+const chartState = { fearGreed: null, fearGreedRange: 366, nationalTeam: null, nationalRange: 21 };
 // Reuse the existing functional panels without modal nesting or duplicate controls.
 for (const panel of [elements.portfolioDialog, elements.capabilityDialog]) {
   panel.classList.add("workspace-panel");
@@ -120,8 +128,36 @@ async function setView(view, { refresh = false } = {}) {
     if (!document.querySelector("#position-purchased-at").value) document.querySelector("#position-purchased-at").value = toDateTimeLocal(new Date());
     await loadPortfolio();
   } else if (view === "capabilities") await loadCapabilities(refresh);
+  else if (view === "charts") await loadCharts();
 }
 document.querySelectorAll("[data-view-target]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.viewTarget)));
+document.querySelector("#chart-grid").addEventListener("click", (event) => {
+  if (event.target.closest("[data-refresh-charts]")) { loadCharts(); return; }
+  const fear = event.target.closest("[data-fear-range]");
+  if (fear && chartState.fearGreed) {
+    chartState.fearGreedRange = Number(fear.dataset.fearRange);
+    renderFearGreedPanel();
+    return;
+  }
+  const flow = event.target.closest("[data-flow-range]");
+  if (flow && chartState.nationalTeam) {
+    chartState.nationalRange = Number(flow.dataset.flowRange);
+    renderNationalTeamPanel();
+  }
+});
+document.querySelector("#chart-grid").addEventListener("pointerdown", startChartResize);
+document.querySelector("#chart-grid").addEventListener("pointermove", (event) => {
+  if (chartResize) return;
+  if (event.target.closest(".fear-chart")) { showFlowCursor(null); moveFearGreedCursor(event); return; }
+  if (event.target.closest(".flow-chart")) { showFearGreedCursor(null); moveFlowCursor(event); return; }
+  showFearGreedCursor(null);
+  showFlowCursor(null);
+});
+document.querySelector("#chart-grid").addEventListener("pointerleave", () => {
+  if (chartResize) return;
+  showFearGreedCursor(null);
+  showFlowCursor(null);
+});
 function newConversation() {
   if (state.sending || state.switchingChat) { showToast("请等待当前对话操作完成后再开始新对话"); return; }
   state.sessionId = "";
@@ -201,7 +237,6 @@ document.querySelector("#cancel-mcp").addEventListener("click", closeMcpForm);
 elements.mcpForm.addEventListener("submit", saveMcp);
 elements.mcpLedger.addEventListener("change", onMcpChange);
 elements.mcpLedger.addEventListener("click", onMcpClick);
-elements.traceLookup.addEventListener("submit", openTraceById);
 
 loadDashboard();
 loadPortfolio();
@@ -224,6 +259,428 @@ async function loadDashboard() {
     elements.systemStatus.textContent = "本地服务连接异常";
     console.error(error);
   }
+}
+
+const CHART_PANEL_DEFAULT = { width: 480, height: 300 };
+let chartResize = null;
+let chartResizeFrame = 0;
+
+function readChartSizes() {
+  try { return JSON.parse(localStorage.getItem("livermore.chartSizes") || "{}"); }
+  catch { return {}; }
+}
+
+function chartPanelSize(id) {
+  const saved = readChartSizes()[id];
+  const width = Number(saved?.width);
+  const height = Number(saved?.height);
+  return {
+    width: Number.isFinite(width) ? width : CHART_PANEL_DEFAULT.width,
+    height: Number.isFinite(height) ? height : CHART_PANEL_DEFAULT.height,
+  };
+}
+
+function chartPanelBox(id, body) {
+  const size = chartPanelSize(id);
+  return `<article class="chart-panel" id="${id}" style="width:${size.width}px;height:${size.height}px">${body}<button class="chart-resize" type="button" data-chart-resize aria-label="拖动调整图表大小"></button></article>`;
+}
+
+function saveChartPanelSize(id, width, height) {
+  const sizes = readChartSizes();
+  sizes[id] = { width: Math.round(width), height: Math.round(height) };
+  localStorage.setItem("livermore.chartSizes", JSON.stringify(sizes));
+}
+
+function startChartResize(event) {
+  const handle = event.target.closest("[data-chart-resize]");
+  if (!handle || chartResize) return;
+  event.preventDefault();
+  const panel = handle.closest(".chart-panel");
+  chartResize = {
+    panel,
+    startX: event.clientX,
+    startY: event.clientY,
+    width: panel.offsetWidth,
+    height: panel.offsetHeight,
+  };
+  panel.classList.add("resizing");
+  document.body.classList.add("chart-resizing");
+  document.addEventListener("pointermove", moveChartResize);
+  document.addEventListener("pointerup", endChartResize);
+  document.addEventListener("pointercancel", endChartResize);
+}
+
+function moveChartResize(event) {
+  if (!chartResize) return;
+  const grid = document.querySelector("#chart-grid");
+  const maxWidth = Math.max(320, grid.clientWidth);
+  const width = Math.min(maxWidth, Math.max(320, chartResize.width + event.clientX - chartResize.startX));
+  const height = Math.min(760, Math.max(220, chartResize.height + event.clientY - chartResize.startY));
+  chartResize.panel.style.width = `${Math.round(width)}px`;
+  chartResize.panel.style.height = `${Math.round(height)}px`;
+  cancelAnimationFrame(chartResizeFrame);
+  chartResizeFrame = requestAnimationFrame(() => layoutResizedChart(chartResize?.panel));
+}
+
+function endChartResize() {
+  if (!chartResize) return;
+  const panel = chartResize.panel;
+  panel.classList.remove("resizing");
+  document.body.classList.remove("chart-resizing");
+  saveChartPanelSize(panel.id, panel.offsetWidth, panel.offsetHeight);
+  chartResize = null;
+  document.removeEventListener("pointermove", moveChartResize);
+  document.removeEventListener("pointerup", endChartResize);
+  document.removeEventListener("pointercancel", endChartResize);
+  layoutResizedChart(panel);
+}
+
+function layoutResizedChart(panel) {
+  if (panel?.id === "national-team-panel") layoutFlowChart();
+  else layoutFearGreedChart();
+}
+
+function mountChartPanel(html) {
+  const holder = document.createElement("template");
+  holder.innerHTML = html.trim();
+  const next = holder.content.firstElementChild;
+  if (!next) return;
+  const current = document.getElementById(next.id);
+  if (current) current.replaceWith(next);
+  else document.querySelector("#chart-grid").append(next);
+}
+
+async function loadCharts() {
+  const grid = document.querySelector("#chart-grid");
+  grid.innerHTML = `${chartPanelBox("fear-greed-panel", `<p class="chart-empty">正在读取韭圈恐贪指数…</p>`)}${chartPanelBox("national-team-panel", `<p class="chart-empty">正在汇总国家队宽基 ETF 净买卖…</p>`)}`;
+  await Promise.all([loadFearGreedChart(), loadNationalTeamChart()]);
+}
+
+async function loadFearGreedChart() {
+  try {
+    const response = await fetch("/api/charts/fear-greed");
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.message || data.error || `HTTP ${response.status}`);
+    chartState.fearGreed = data;
+    renderFearGreedPanel();
+  } catch (error) {
+    mountChartPanel(chartPanelBox("fear-greed-panel", `<header class="chart-panel-head"><div><p class="eyebrow">韭圈儿</p><h3>恐贪指数</h3></div></header><p class="chart-empty">${escapeHtml(error.message)}</p>`));
+  }
+}
+
+async function loadNationalTeamChart() {
+  try {
+    const response = await fetch("/api/charts/national-team");
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.message || data.error || `HTTP ${response.status}`);
+    chartState.nationalTeam = data;
+    renderNationalTeamPanel();
+  } catch (error) {
+    mountChartPanel(chartPanelBox("national-team-panel", `<header class="chart-panel-head"><div><p class="eyebrow">宽基 ETF</p><h3>国家队净买卖</h3></div></header><p class="chart-empty">${escapeHtml(error.message)}</p>`));
+  }
+}
+
+function renderFearGreedPanel() {
+  const data = chartState.fearGreed;
+  const latest = data?.latest;
+  if (!latest) return;
+  chartState.fearGreedWindow = fearGreedWindow(data.points, chartState.fearGreedRange);
+  const ranges = [[92, "3 个月"], [366, "1 年"], [0, "全部"]];
+  mountChartPanel(chartPanelBox("fear-greed-panel", `
+      <header class="chart-panel-head">
+        <div><p class="eyebrow">韭圈儿</p><h3>恐贪指数</h3></div>
+        <div class="chart-panel-tools">
+          <div class="chart-ranges">${ranges.map(([days, label]) => `<button type="button" data-fear-range="${days}" class="${days === chartState.fearGreedRange ? "selected" : ""}">${label}</button>`).join("")}</div>
+          <button class="icon-button" type="button" data-refresh-charts aria-label="刷新图表">↻</button>
+        </div>
+      </header>
+      <div class="fear-readout ${escapeHtml(latest.band)}">
+        <strong>${latest.value.toFixed(1)}</strong>
+        <span>${escapeHtml(latest.label)}</span>
+        <time>${escapeHtml(latest.date)}</time>
+      </div>
+      ${fearGreedGauge(latest.value)}
+      <p class="fear-note">${escapeHtml(latest.note)}</p>
+      <div class="fear-chart-wrap"></div>`));
+  layoutFearGreedChart();
+}
+
+function renderNationalTeamPanel() {
+  const data = chartState.nationalTeam;
+  const latest = data?.latest;
+  if (!latest) return;
+  chartState.flowWindow = flowWindow(data.points, chartState.nationalRange);
+  const ranges = [[21, "1 个月"], [63, "3 个月"], [0, "1 年"]];
+  const tone = latest.label === "净买入" ? "buy" : latest.label === "净卖出" ? "sell" : "flat";
+  mountChartPanel(chartPanelBox("national-team-panel", `
+      <header class="chart-panel-head">
+        <div><p class="eyebrow">宽基 ETF</p><h3>国家队净买卖</h3></div>
+        <div class="chart-panel-tools">
+          <div class="chart-ranges">${ranges.map(([count, label]) => `<button type="button" data-flow-range="${count}" class="${count === chartState.nationalRange ? "selected" : ""}">${label}</button>`).join("")}</div>
+          <button class="icon-button" type="button" data-refresh-charts aria-label="刷新图表">↻</button>
+        </div>
+      </header>
+      <div class="fear-readout flow-readout ${tone}">
+        <strong>${formatYi(latest.value)}</strong>
+        <span>亿元</span>
+        <em>${escapeHtml(latest.label)}</em>
+        <time>${escapeHtml(latest.date)}</time>
+      </div>
+      <p class="fear-note">份额变化 × 当日净值</p>
+      <div class="fear-chart-wrap"></div>`));
+  layoutFlowChart();
+}
+
+function flowWindow(points, count) {
+  if (!count || points.length <= count) return points;
+  return points.slice(-count);
+}
+
+function formatYi(value, digits = 1) {
+  if (!value) return "0";
+  const text = Math.abs(value).toFixed(digits);
+  return value > 0 ? `+${text}` : `-${text}`;
+}
+
+function moveFlowCursor(event) {
+  const svg = event.target.closest(".flow-chart");
+  const points = chartState.flowWindow;
+  if (!svg || !points?.length || chartResize) { showFlowCursor(null); return; }
+  const view = svg.viewBox.baseVal;
+  if (!view.width || !view.height) return;
+  const metrics = flowChartMetrics(points, view.width, view.height);
+  const rect = svg.getBoundingClientRect();
+  const viewX = (event.clientX - rect.left) / rect.width * metrics.width;
+  if (viewX < metrics.left || viewX > metrics.left + metrics.plotW) { showFlowCursor(null); return; }
+  const index = points.length === 1 ? 0 : Math.round((viewX - metrics.left) / metrics.plotW * (points.length - 1));
+  showFlowCursor(points[index], index, metrics);
+}
+
+function showFlowCursor(point, index, metrics) {
+  const panel = document.querySelector("#national-team-panel");
+  const readout = panel?.querySelector(".flow-readout");
+  const crosshair = panel?.querySelector(".fear-crosshair");
+  const hover = panel?.querySelector(".fear-hover");
+  const tooltip = panel?.querySelector(".fear-tooltip");
+  const latest = chartState.nationalTeam?.latest;
+  const shown = point || latest;
+  if (!readout || !shown) return;
+  const tone = shown.label === "净买入" ? "buy" : shown.label === "净卖出" ? "sell" : "flat";
+  readout.className = `fear-readout flow-readout ${tone}`;
+  readout.querySelector("strong").textContent = formatYi(shown.value);
+  readout.querySelector("em").textContent = shown.label;
+  readout.querySelector("time").textContent = shown.date;
+  if (!crosshair || !hover || !tooltip) return;
+  if (!point || !metrics) {
+    crosshair.setAttribute("visibility", "hidden");
+    hover.setAttribute("visibility", "hidden");
+    tooltip.hidden = true;
+    return;
+  }
+  const x = metrics.x(index);
+  const y = metrics.y(point.value);
+  crosshair.setAttribute("x1", x.toFixed(1));
+  crosshair.setAttribute("x2", x.toFixed(1));
+  crosshair.setAttribute("y1", metrics.top);
+  crosshair.setAttribute("y2", metrics.top + metrics.plotH);
+  crosshair.removeAttribute("visibility");
+  hover.setAttribute("cx", x.toFixed(1));
+  hover.setAttribute("cy", y.toFixed(1));
+  hover.removeAttribute("visibility");
+  tooltip.hidden = false;
+  tooltip.textContent = `${point.date}  ${formatYi(point.value)} 亿  ${point.label}`;
+  const wrap = tooltip.parentElement.getBoundingClientRect();
+  const svg = tooltip.parentElement.querySelector(".flow-chart").getBoundingClientRect();
+  const left = svg.left - wrap.left + (x / metrics.width) * svg.width + 12;
+  tooltip.style.left = `${Math.min(left, wrap.width - tooltip.offsetWidth - 8)}px`;
+  tooltip.style.top = `${Math.max(8, svg.top - wrap.top + (y / metrics.height) * svg.height - 28)}px`;
+}
+
+function flowChartMetrics(points, width, height) {
+  const values = points.map((point) => point.value);
+  const frame = { width, height, left: 36, right: 8, top: 8, bottom: 16 };
+  const plotW = Math.max(1, frame.width - frame.left - frame.right);
+  const plotH = Math.max(1, frame.height - frame.top - frame.bottom);
+  const pad = Math.max((Math.max(...values, 0) - Math.min(...values, 0)) * 0.12, 0.5);
+  const min = Math.min(...values, 0) - pad;
+  const max = Math.max(...values, 0) + pad;
+  return {
+    ...frame,
+    plotW,
+    plotH,
+    min,
+    max,
+    y: (value) => frame.top + (max - value) / (max - min) * plotH,
+    x: (index) => frame.left + (points.length <= 1 ? plotW / 2 : index / (points.length - 1) * plotW),
+  };
+}
+
+function layoutFlowChart() {
+  const wrap = document.querySelector("#national-team-panel .fear-chart-wrap");
+  const points = chartState.flowWindow;
+  if (!wrap || !points?.length) return;
+  wrap.innerHTML = flowChart(points, Math.max(1, Math.round(wrap.clientWidth)), Math.max(1, Math.round(wrap.clientHeight)));
+}
+
+function flowChart(points, width, height) {
+  const metrics = flowChartMetrics(points, width, height);
+  const { left, right, top, plotW, plotH, x, y } = metrics;
+  const ticks = flowTicks(metrics.min, metrics.max);
+  const gap = plotW / points.length;
+  const barW = Math.max(1, Math.min(14, gap * 0.62));
+  const zero = y(0);
+  const axisDate = (date) => date.slice(2);
+  const middle = points[Math.floor((points.length - 1) / 2)];
+  const middleLabel = width >= 420 ? `<text class="axis" x="${x(Math.floor((points.length - 1) / 2)).toFixed(1)}" y="${height - 3}" text-anchor="middle">${escapeHtml(axisDate(middle.date))}</text>` : "";
+  return `<svg class="flow-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="国家队净买卖，横轴为时间，纵轴为亿元">
+      ${ticks.map((tick) => `<line class="gridline" x1="${left}" x2="${left + plotW}" y1="${y(tick).toFixed(1)}" y2="${y(tick).toFixed(1)}"></line><text class="axis" x="${left - 6}" y="${y(tick).toFixed(1)}" text-anchor="end" dominant-baseline="middle">${formatYi(tick, Math.abs(tick) >= 100 ? 0 : 1).replace("+", "")}</text>`).join("")}
+      <line class="zero" x1="${left}" x2="${left + plotW}" y1="${zero.toFixed(1)}" y2="${zero.toFixed(1)}"></line>
+      ${points.map((point, index) => {
+        const topY = Math.min(zero, y(point.value));
+        const barH = Math.max(1, Math.abs(zero - y(point.value)));
+        const tone = point.value > 0 ? "flow-buy" : point.value < 0 ? "flow-sell" : "flow-flat";
+        return `<rect class="${tone}" x="${(x(index) - barW / 2).toFixed(1)}" y="${topY.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}"></rect>`;
+      }).join("")}
+      <line class="fear-crosshair" visibility="hidden" x1="${left}" x2="${left}" y1="${top}" y2="${top + plotH}"></line>
+      <circle class="fear-hover" visibility="hidden" r="3"></circle>
+      <text class="axis" x="${left}" y="${height - 3}">${escapeHtml(axisDate(points[0].date))}</text>
+      ${middleLabel}
+      <text class="axis" x="${width - right}" y="${height - 3}" text-anchor="end">${escapeHtml(axisDate(points.at(-1).date))}</text>
+      <rect class="fear-hit" x="${left}" y="${top}" width="${plotW}" height="${plotH}"></rect>
+    </svg>
+    <div class="fear-tooltip" hidden></div>`;
+}
+
+function flowTicks(min, max) {
+  const span = Math.max(max - min, 1);
+  const raw = span / 4;
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  const fraction = raw / pow;
+  const step = (fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10) * pow;
+  const ticks = [];
+  for (let value = Math.ceil(min / step) * step; value <= max + step * 0.01; value += step) ticks.push(Number(value.toFixed(4)));
+  if (min < 0 && max > 0 && !ticks.some((tick) => Math.abs(tick) < step / 50)) ticks.push(0);
+  return [...new Set(ticks)].sort((left, right) => left - right);
+}
+
+function moveFearGreedCursor(event) {
+  const svg = event.target.closest(".fear-chart");
+  const points = chartState.fearGreedWindow;
+  if (!svg || !points?.length || chartResize) { showFearGreedCursor(null); return; }
+  const view = svg.viewBox.baseVal;
+  if (!view.width || !view.height) return;
+  const metrics = fearChartMetrics(points.length, view.width, view.height);
+  const rect = svg.getBoundingClientRect();
+  const viewX = (event.clientX - rect.left) / rect.width * metrics.width;
+  if (viewX < metrics.left || viewX > metrics.left + metrics.plotW) { showFearGreedCursor(null); return; }
+  const index = points.length === 1 ? 0 : Math.round((viewX - metrics.left) / metrics.plotW * (points.length - 1));
+  showFearGreedCursor(points[index], index, metrics);
+}
+
+function showFearGreedCursor(point, index, metrics) {
+  const readout = document.querySelector(".fear-readout");
+  const note = document.querySelector(".fear-note");
+  const mark = document.querySelector(".fear-gauge-mark");
+  const crosshair = document.querySelector(".fear-crosshair");
+  const hover = document.querySelector(".fear-hover");
+  const tooltip = document.querySelector(".fear-tooltip");
+  const latest = chartState.fearGreed?.latest;
+  const shown = point || latest;
+  if (!readout || !shown) return;
+  readout.className = `fear-readout ${shown.band}`;
+  readout.querySelector("strong").textContent = shown.value.toFixed(1);
+  readout.querySelector("span").textContent = shown.label;
+  readout.querySelector("time").textContent = shown.date;
+  if (note) note.textContent = shown.note;
+  if (mark) mark.style.left = `${Math.min(100, Math.max(0, shown.value))}%`;
+  if (!crosshair || !hover || !tooltip) return;
+  if (!point || !metrics) {
+    crosshair.setAttribute("visibility", "hidden");
+    hover.setAttribute("visibility", "hidden");
+    tooltip.hidden = true;
+    return;
+  }
+  const x = metrics.x(index);
+  const y = metrics.y(point.value);
+  crosshair.setAttribute("x1", x.toFixed(1));
+  crosshair.setAttribute("x2", x.toFixed(1));
+  crosshair.setAttribute("y1", metrics.top);
+  crosshair.setAttribute("y2", metrics.top + metrics.plotH);
+  crosshair.removeAttribute("visibility");
+  hover.setAttribute("cx", x.toFixed(1));
+  hover.setAttribute("cy", y.toFixed(1));
+  hover.removeAttribute("visibility");
+  tooltip.hidden = false;
+  tooltip.textContent = `${point.date}  ${point.value.toFixed(1)}  ${point.label}`;
+  const wrap = tooltip.parentElement.getBoundingClientRect();
+  const svg = tooltip.parentElement.querySelector(".fear-chart").getBoundingClientRect();
+  const left = svg.left - wrap.left + (x / metrics.width) * svg.width + 12;
+  tooltip.style.left = `${Math.min(left, wrap.width - tooltip.offsetWidth - 8)}px`;
+  tooltip.style.top = `${Math.max(8, svg.top - wrap.top + (y / metrics.height) * svg.height - 28)}px`;
+}
+
+function fearGreedWindow(points, days) {
+  if (!days || points.length === 0) return points;
+  const end = Date.parse(`${points.at(-1).date}T00:00:00Z`);
+  const start = end - days * 86_400_000;
+  const windowed = points.filter((point) => Date.parse(`${point.date}T00:00:00Z`) >= start);
+  return windowed.length > 0 ? windowed : points.slice(-1);
+}
+
+function fearGreedGauge(value) {
+  const zones = [[10, "extreme-fear"], [20, "fear"], [20, "neutral"], [20, "greed"], [30, "extreme-greed"]];
+  const position = Math.min(100, Math.max(0, value));
+  return `<div class="fear-gauge" aria-hidden="true"><div class="fear-gauge-bar"><div class="fear-gauge-track">${zones.map(([size, name]) => `<span class="${name}" style="flex:${size}"></span>`).join("")}</div><span class="fear-gauge-mark" style="left:${position}%"></span></div><div class="fear-gauge-scale"><span>0</span><span>50</span><span>100</span></div></div>`;
+}
+
+function fearChartMetrics(count, width, height) {
+  const frame = { width, height, left: 30, right: 8, top: 6, bottom: 16 };
+  const plotW = Math.max(1, frame.width - frame.left - frame.right);
+  const plotH = Math.max(1, frame.height - frame.top - frame.bottom);
+  return {
+    ...frame,
+    plotW,
+    plotH,
+    y: (value) => frame.top + (100 - value) / 100 * plotH,
+    x: (index) => frame.left + (count <= 1 ? plotW / 2 : index / (count - 1) * plotW),
+  };
+}
+
+function layoutFearGreedChart() {
+  const wrap = document.querySelector("#fear-greed-panel .fear-chart-wrap");
+  const points = chartState.fearGreedWindow;
+  if (!wrap || !points?.length) return;
+  const width = Math.max(1, Math.round(wrap.clientWidth));
+  const height = Math.max(1, Math.round(wrap.clientHeight));
+  wrap.innerHTML = fearGreedChart(points, width, height);
+}
+
+function fearGreedChart(points, width, height) {
+  if (points.length === 0) return "";
+  const metrics = fearChartMetrics(points.length, width, height);
+  const { left, right, top, plotW, plotH, x, y } = metrics;
+  const zones = [[0, 10, "extreme-fear"], [10, 30, "fear"], [30, 50, "neutral"], [50, 70, "greed"], [70, 100, "extreme-greed"]];
+  const ticks = [0, 25, 50, 75, 100];
+  const line = points.map((point, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${y(point.value).toFixed(1)}`).join("");
+  const area = `${line}L${x(points.length - 1).toFixed(1)},${y(0).toFixed(1)}L${x(0).toFixed(1)},${y(0).toFixed(1)}Z`;
+  const last = points.at(-1);
+  const middle = points[Math.floor((points.length - 1) / 2)];
+  const axisDate = (date) => date.slice(2);
+  const middleLabel = width >= 420 ? `<text class="axis" x="${x(Math.floor((points.length - 1) / 2)).toFixed(1)}" y="${height - 3}" text-anchor="middle">${escapeHtml(axisDate(middle.date))}</text>` : "";
+  return `<svg class="fear-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="恐贪指数，横轴为时间，纵轴为 0 到 100">
+      ${zones.map(([from, to, name]) => `<rect class="zone ${name}" x="${left}" y="${y(to).toFixed(1)}" width="${plotW}" height="${(y(from) - y(to)).toFixed(1)}"></rect>`).join("")}
+      ${ticks.map((tick) => `<line class="gridline" x1="${left}" x2="${left + plotW}" y1="${y(tick).toFixed(1)}" y2="${y(tick).toFixed(1)}"></line><text class="axis" x="${left - 6}" y="${y(tick).toFixed(1)}" text-anchor="end" dominant-baseline="middle">${tick}</text>`).join("")}
+      <path class="fear-area" d="${area}"></path>
+      <path class="fear-line" d="${line}"></path>
+      <line class="fear-crosshair" visibility="hidden" x1="${left}" x2="${left}" y1="${top}" y2="${top + plotH}"></line>
+      <circle class="fear-hover" visibility="hidden" r="3"></circle>
+      <circle class="fear-dot" cx="${x(points.length - 1).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="2.5"></circle>
+      <text class="axis" x="${left}" y="${height - 3}">${escapeHtml(axisDate(points[0].date))}</text>
+      ${middleLabel}
+      <text class="axis" x="${width - right}" y="${height - 3}" text-anchor="end">${escapeHtml(axisDate(last.date))}</text>
+      <rect class="fear-hit" x="${left}" y="${top}" width="${plotW}" height="${plotH}"></rect>
+    </svg>
+    <div class="fear-tooltip" hidden></div>`;
 }
 
 function renderDashboard(data) {
@@ -392,6 +849,7 @@ async function openTaskConfig(task) {
     document.querySelector("#task-prompt-help").textContent = value.custom ? "独立研究 Agent 可调用已安装的只读 Skills 和工具。支持 {{localNow}}、{{timezone}}、{{nowIso}}、{{mode}}；默认不启用定时，可先手动运行验证。" : task === "portfolio-risk-check"
       ? "编辑巡检任务指令。运行时会注入时间、真实持仓和数据口径；工具权限与确定性风险复核仍保持生效。"
       : "运行时变量：{{sources}} 来源（必须保留）、{{localNow}} 本地时间、{{timezone}} 时区、{{nowIso}} UTC 时间、{{mode}} 模式。";
+    document.querySelector("#task-times-label").textContent = value.modes.length > 1 ? "运行时间与模式" : "运行时间";
     document.querySelector("#task-weekdays").innerHTML = ["一", "二", "三", "四", "五", "六", "日"].map((day, index) => `<label><input type="checkbox" value="${index + 1}" ${value.weekdays.includes(index + 1) ? "checked" : ""}><span>${day}</span></label>`).join("");
     document.querySelector("#task-times").replaceChildren();
     for (const item of value.times) appendTaskTime(item.time, item.mode);
@@ -413,8 +871,15 @@ async function deleteCustomTask() {
 }
 
 function appendTaskTime(time, mode) {
-  const row = document.createElement("div"); row.className = "task-time-row";
-  row.innerHTML = `<input type="time" aria-label="运行时间" required value="${escapeHtml(time)}"><select aria-label="运行模式">${(state.taskConfig?.modes || []).map((item) => `<option value="${escapeHtml(item)}" ${item === mode ? "selected" : ""}>${escapeHtml(modeLabel(item))}</option>`).join("")}</select><button type="button" aria-label="删除运行时间">×</button>`;
+  const modes = state.taskConfig?.modes || [];
+  const showMode = modes.length > 1;
+  const resolved = modes.includes(mode) ? mode : (modes[0] || "research");
+  const row = document.createElement("div");
+  row.className = showMode ? "task-time-row" : "task-time-row time-only";
+  const modeControl = showMode
+    ? `<select aria-label="运行模式">${modes.map((item) => `<option value="${escapeHtml(item)}" ${item === resolved ? "selected" : ""}>${escapeHtml(modeLabel(item))}</option>`).join("")}</select>`
+    : `<input type="hidden" value="${escapeHtml(resolved)}">`;
+  row.innerHTML = `<input type="time" aria-label="运行时间" required value="${escapeHtml(time)}">${modeControl}<button type="button" aria-label="删除运行时间">×</button>`;
   row.querySelector("button").addEventListener("click", () => { row.remove(); state.taskConfigDirty = true; });
   document.querySelector("#task-times").append(row);
 }
@@ -432,7 +897,7 @@ async function saveTaskConfig(event) {
   try {
     const payload = { revision: config.revision, enabled: document.querySelector("#task-enabled").checked, timezone: document.querySelector("#task-timezone").value.trim(), prompt: document.querySelector("#task-prompt").value,
       weekdays: [...document.querySelectorAll("#task-weekdays input:checked")].map((input) => Number(input.value)),
-      times: [...document.querySelectorAll(".task-time-row")].map((row) => ({ time: row.querySelector("input").value, mode: row.querySelector("select").value })) };
+      times: [...document.querySelectorAll(".task-time-row")].map((row) => ({ time: row.querySelector("input").value, mode: row.querySelector("select")?.value || row.querySelector("input[type=hidden]")?.value })) };
     payload.title = document.querySelector("#task-name").value.trim();
     const response = await fetch(config.task ? `/api/tasks/${encodeURIComponent(config.task)}/config` : "/api/tasks", { method: config.task ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const result = await response.json();
@@ -1075,18 +1540,6 @@ async function openRun(id) {
     elements.dialogTitle.textContent = "任务读取失败";
     elements.dialogReport.textContent = error.message;
   }
-}
-
-function openTraceById(event) {
-  event.preventDefault();
-  const traceId = elements.traceId.value.trim().replace(/^0x/i, "");
-  if (!/^[a-f0-9]{32}$/i.test(traceId)) {
-    showToast("Trace ID 应为 32 位十六进制字符");
-    elements.traceId.focus();
-    return;
-  }
-  const opened = window.open(traceUrl(traceId), "_blank", "noopener,noreferrer");
-  if (!opened) window.location.assign(traceUrl(traceId));
 }
 
 function traceUrl(traceId) {

@@ -266,7 +266,6 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
               now,
               options.config.timezone,
               agentResult.analysis,
-              fundFlowUnavailable,
             ),
           });
         });
@@ -500,20 +499,18 @@ ${JSON.stringify(positions.map((position) => ({
 重要口径：上述 costBasis 均为用户维护的复权后单位成本，可直接与最新价比较；不得再询问或推测成本价是否复权。
 
 必须先读取 futuapi Skill，再通过 query_futu_market 获取全部标的的行情和技术指标。
-取得证券简称后，必须调用 query_futu_news 查询全部持仓的最新新闻、公告或评级，并将最重要的消息纳入飞书风险摘要。
+取得证券简称后，必须调用 query_futu_news 查询全部持仓的最新新闻、公告或评级，并将最重要的消息写入简明总结。
 ${mainlandSymbols.length > 0
     ? `A 股持仓：${mainlandSymbols.join("、")}。仅针对这些代码调用 query_a_share_main_fund_flow，从东方财富数据中心获取主力净流入及超大单/大单/中单/小单明细。不要调用 query_a_share_main_fund_flow_rank。`
     : "本次没有 A 股持仓，不得调用东方财富资金流向查询。"}
 港股不适用“主力净流入”指标：不得查询、展示或推断港股主力净流入。
 
 输出要求：
-1. 第一部分必须是“## 飞书风险摘要”，包含 2-4 句简明总结和覆盖全部持仓的风险优先级表格；总结必须包含与持仓直接相关的最新消息。
-2. 风险表格列固定为“优先级｜代码｜标的｜操作建议｜核心风险”，按 P0、P1、P2 排序。
-3. 摘要后再给出组合整体风险判断和逐只完整分析。
-4. 逐只持仓输出：事实、推断、操作建议、执行条件或参考区间、建议失效条件。
-5. “操作建议”必须严格从“买入 / 持有 / 卖出”中选择一个，不得使用其他模糊结论。
-6. 买入表示新建或加仓，持有表示维持当前仓位，卖出表示减仓或退出。
-7. 最终输出只基于工具结果，不构成投资建议。`;
+1. 直接写 Markdown：先“## 简明总结”，再“## 风险优先级”表格，然后“## 持仓说明”。
+2. 总结用 2-4 句话，并包含与持仓直接相关的最新消息。表格列固定为“优先级｜代码｜标的｜操作建议｜核心风险”，按 P0、P1、P2 排序。操作建议只能是买入、持有或卖出。
+3. 持仓说明里每只两句话：为什么是这个建议，以及建议何时失效。
+4. 不要另写研究过程章节，也不要复述行情数字。
+5. 最终输出只基于工具结果，不构成投资建议。`;
 }
 
 export function evaluateRisk(input: {
@@ -641,28 +638,16 @@ function buildAlertBody(
   now: Date,
   timezone: string,
   agentAnalysis: string,
-  fundFlowUnavailable: boolean,
 ): string {
   const checkedAt = new Intl.DateTimeFormat("zh-CN", {
     timeZone: timezone, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
   }).format(now);
-  const summary = extractFeishuRiskSummary(agentAnalysis) ?? fallbackRiskSummary(items);
+  const document = agentAnalysis.trim() || fallbackRiskSummary(items);
+  const disclaimer = "以上内容仅供研究参考，不构成投资建议。";
   return [
     `检查时间：${checkedAt}`,
-    summary,
-    `数据：行情/技术指标/资讯来自 Futu OpenAPI；A股主力资金来自东方财富数据中心${fundFlowUnavailable ? "（本次查询失败，暂缺）" : ""}；港股不适用主力净流入。`,
-    "以上内容仅供研究参考，不构成投资建议。",
-  ].join("\n");
-}
-
-export function extractFeishuRiskSummary(value: string): string | undefined {
-  const heading = value.match(/(?:^|\r?\n)## 飞书风险摘要[^\S\r\n]*\r?\n/);
-  if (!heading || heading.index === undefined) return undefined;
-  const remainder = value.slice(heading.index + heading[0].length);
-  const nextSection = remainder.search(/\r?\n##(?!#)\s/);
-  const summary = (nextSection < 0 ? remainder : remainder.slice(0, nextSection)).trim();
-  if (!summary) return undefined;
-  return summary.length <= 2_500 ? summary : `${summary.slice(0, 2_500).trimEnd()}…`;
+    document.includes(disclaimer) ? document : `${document}\n\n${disclaimer}`,
+  ].join("\n\n");
 }
 
 function fallbackRiskSummary(items: AssessedPosition[]): string {

@@ -17,6 +17,8 @@ import { getTaskSettings, isTaskName, saveTaskSettings, scheduleDescription, tas
 import { notificationPreview } from "./notifications/macos-channel.js";
 import { createCustomResearchTask, defaultTaskSettings, isBuiltinTaskName, listTaskNames, modesForTask, titleForTask } from "./tasks/task-settings.js";
 import { ChatSessionError, PersistentChatSessions, visibleChatMessages } from "./chat/persistent-sessions.js";
+import { queryJiucaishuoFearGreed } from "./market/jiucaishuo-fear-greed.js";
+import { queryNationalTeamFlow } from "./market/national-team-etf-flow.js";
 import { entryAtrStop } from "./portfolio/entry-stop.js";
 import { refreshMcpServerTools } from "./mcp/agent-tools.js";
 import { createMcpServer, deleteMcpServer, McpConfigError, toPublicMcp, updateMcpServer, resolveBriefingMcp } from "./mcp/registry.js";
@@ -152,6 +154,10 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
       return sendJson(response, 200, toPublicMcp(updated));
     }
     sendJson(response, 405, { error: "Method not allowed." });
+  } else if (request.method === "GET" && url.pathname === "/api/charts/fear-greed") {
+    sendJson(response, 200, await queryJiucaishuoFearGreed());
+  } else if (request.method === "GET" && url.pathname === "/api/charts/national-team") {
+    sendJson(response, 200, await queryNationalTeamFlow());
   } else if (request.method === "GET" && url.pathname === "/api/portfolio") {
     sendJson(response, 200, { positions: database.listPositions() });
   } else if (request.method === "POST" && url.pathname === "/api/portfolio") {

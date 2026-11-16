@@ -8,9 +8,9 @@ import { Telemetry } from "../src/observability/telemetry.js";
 import {
   buildAgentPrompt,
   evaluateRisk,
-  extractFeishuRiskSummary,
   runPortfolioRiskCheck,
 } from "../src/portfolio/risk-check.js";
+import { portfolioRiskInstructions } from "../src/portfolio/risk-instructions.js";
 import { InvestmentDatabase } from "../src/storage/database.js";
 
 describe("portfolio ledger", () => {
@@ -231,28 +231,22 @@ describe("portfolio risk policy", () => {
 
     expect(prompt).toContain("复权后单位成本");
     expect(prompt).toContain("\"costBasisAdjusted\": true");
-    expect(prompt).toContain("买入 / 持有 / 卖出");
+    expect(prompt).toContain("买入、持有或卖出");
+    expect(prompt).toContain("## 持仓说明");
+    expect(prompt).not.toContain("逐只完整分析");
+    expect(portfolioRiskInstructions).toContain("## 简明总结");
+    expect(portfolioRiskInstructions).toContain("## 持仓说明");
+    expect(portfolioRiskInstructions).not.toContain("飞书");
+    expect(prompt).not.toContain("飞书");
     expect(prompt).toContain("不得再询问或推测成本价是否复权");
     expect(prompt).toContain("港股不适用“主力净流入”指标");
     expect(prompt).toContain("query_futu_news");
   });
 
-  it("extracts only the compact Feishu risk summary from a full Agent report", () => {
-    const report = `## 飞书风险摘要
-### 简明总结
-腾讯发布最新业务更新（2026-07-28，Futu 资讯），对持仓影响偏正面。
-
-### 风险优先级
-| 优先级 | 代码 | 标的 | 操作建议 | 核心风险 |
-|---|---|---|---|---|
-| P0 | 600487 | 亨通光电 | 卖出 | 深度浮亏 |
-
-## 完整分析
-这里是不会推送到飞书的长篇分析。`;
-    const summary = extractFeishuRiskSummary(report);
-    expect(summary).toContain("腾讯发布最新业务更新");
-    expect(summary).toContain("| P0 | 600487");
-    expect(summary).not.toContain("完整分析");
+  it("keeps the portfolio document free of a Feishu-only section", () => {
+    expect(portfolioRiskInstructions).not.toContain("飞书风险摘要");
+    expect(portfolioRiskInstructions).toContain("## 简明总结");
+    expect(portfolioRiskInstructions).toContain("## 风险优先级");
   });
 
   it("classifies loss and intraday drawdown thresholds deterministically", () => {
@@ -355,6 +349,10 @@ describe("portfolio risk policy", () => {
         severity: "critical",
       });
       const report = await readFile(result.reportPath, "utf8");
+      const alert = database.listAlerts()[0];
+      expect(alert?.body).toContain("平安银行价格走弱，需人工复核资金面");
+      expect(alert?.body).toContain("以上内容仅供研究参考，不构成投资建议。");
+      expect(alert?.body).not.toContain("飞书");
       expect(report).toContain("Agent 辅助研判");
       expect(report).toContain("ATR止损");
       expect(report).toContain("9.50");

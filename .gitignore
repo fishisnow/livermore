@@ -12,6 +12,7 @@ data/reports/*
 data/runtime/*
 !data/runtime/.gitkeep
 data/*.db*
+data/national-team-etf.json
 data/phoenix/
 .venv-phoenix/
 .venv-futu/
