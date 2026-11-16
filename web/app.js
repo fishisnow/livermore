@@ -6,7 +6,6 @@ const state = {
   view: "chat",
   taskConfig: null,
   taskConfigDirty: false,
-  notificationRunId: null,
   selectedTask: null,
   chats: [],
   switchingChat: false,
@@ -178,7 +177,6 @@ document.querySelector("#refresh-chats").addEventListener("click", () => loadCha
 document.querySelector("#more-chats").addEventListener("click", () => loadChatHistory(true));
 document.querySelector("#notification-permission").addEventListener("click", () => nativeBridge?.postMessage({ type: "notification-permission" }));
 document.querySelector("#close-notification").addEventListener("click", () => elements.notificationDialog.close());
-document.querySelector("#notification-run").addEventListener("click", () => { elements.notificationDialog.close(); if (state.notificationRunId) openRun(state.notificationRunId); });
 document.querySelector("#task-config-form").addEventListener("submit", saveTaskConfig);
 document.querySelector("#task-config-form").addEventListener("input", () => { state.taskConfigDirty = true; });
 document.querySelector("#close-task-config").addEventListener("click", closeTaskConfig);
@@ -344,25 +342,33 @@ async function loadNotifications() {
 }
 
 async function openNotification(id) {
-  document.querySelector("#notification-title").textContent = "正在读取消息…";
-  document.querySelector("#notification-meta").replaceChildren();
-  document.querySelector("#notification-body").replaceChildren();
-  document.querySelector("#notification-run").hidden = true;
-  state.notificationRunId = null;
-  if (!elements.notificationDialog.open) elements.notificationDialog.showModal();
   try {
     const response = await fetch(`/api/notifications/${encodeURIComponent(id)}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const message = await response.json();
-    document.querySelector("#notification-title").textContent = message.title;
-    document.querySelector("#notification-meta").innerHTML = `<span>${escapeHtml(formatDate(message.createdAt))}</span>${channelBadges(message.deliveries)}`;
-    document.querySelector("#notification-body").innerHTML = renderReportMarkdown(message.body);
-    state.notificationRunId = message.runId;
-    document.querySelector("#notification-run").hidden = !message.runId;
     const acknowledged = await fetch(`/api/notifications/${encodeURIComponent(id)}/read`, { method: "POST" });
     if (!acknowledged.ok) throw new Error("已读状态保存失败");
     await loadNotifications();
-  } catch (error) { document.querySelector("#notification-body").textContent = `消息读取失败：${error.message}`; }
+    if (message.runId) {
+      if (elements.notificationDialog.open) elements.notificationDialog.close();
+      await openRun(message.runId);
+      return;
+    }
+    showNotificationMessage(message);
+  } catch (error) {
+    showNotificationMessage(null, error.message);
+  }
+}
+
+function showNotificationMessage(message, error) {
+  document.querySelector("#notification-title").textContent = message?.title || "消息读取失败";
+  document.querySelector("#notification-meta").innerHTML = message
+    ? `<span>${escapeHtml(formatDate(message.createdAt))}</span>${channelBadges(message.deliveries)}`
+    : "";
+  document.querySelector("#notification-body").innerHTML = message
+    ? renderReportMarkdown(message.body)
+    : `<p>${escapeHtml(`消息读取失败：${error}`)}</p>`;
+  if (!elements.notificationDialog.open) elements.notificationDialog.showModal();
 }
 
 async function openTaskConfig(task) {

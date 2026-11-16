@@ -8,6 +8,7 @@ const RESERVED_TOOL_NAMES = new Set([
   "list_portfolio_positions",
   "get_task_run",
   "query_a_share_main_fund_flow",
+  "query_a_share_main_fund_flow_rank",
   "query_futu_market",
   "query_futu_news",
   "list_available_skills",

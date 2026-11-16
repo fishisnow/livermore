@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeEastmoneyFundFlowResults,
   queryEastmoneyMainFundFlow,
+  queryEastmoneyMainFundFlowRank,
   toEastmoneySecId,
 } from "../src/market/eastmoney-fund-flow.js";
 import { normalizePortfolioMarketData } from "../src/market/portfolio-market-normalizer.js";
@@ -135,6 +136,72 @@ describe("East Money fund-flow client", () => {
       macd: -0.5,
       mainNetInflow: -123_000,
     });
+  });
+
+  it("requests the East Money clist ranking in the requested direction", async () => {
+    let requested = "";
+    const result = await queryEastmoneyMainFundFlowRank({
+      direction: "outflow",
+      limit: 2,
+      fetchImpl: async (input) => {
+        requested = String(input);
+        return new Response(JSON.stringify({
+          data: {
+            total: 5225,
+            diff: [
+              { f12: "000001", f14: "平安银行", f2: 10.5, f3: -2, f62: -5_000_000, f184: -3.2, f66: -4_000_000, f72: -1_000_000, f124: 1_700_000_000 },
+              { f12: "600519", f14: "贵州茅台", f2: 1400, f3: 0.2, f62: -100_000, f184: -0.1, f66: 10, f72: -110_000, f124: 1_700_000_000 },
+            ],
+          },
+        }), { status: 200 });
+      },
+    });
+    const url = new URL(requested);
+    expect(url.pathname).toBe("/api/qt/clist/get");
+    expect(url.searchParams.get("fid")).toBe("f62");
+    expect(url.searchParams.get("po")).toBe("0");
+    expect(url.searchParams.get("pz")).toBe("2");
+    expect(result).toMatchObject({
+      source: "eastmoney",
+      market: "沪深A股",
+      direction: "outflow",
+      amountUnit: "CNY",
+      success: true,
+      total: 5225,
+      rows: [
+        { rank: 1, symbol: "000001.SZ", name: "平安银行", price: 10.5, changePct: -2, mainNetInflow: -5_000_000 },
+        { rank: 2, symbol: "600519.SH", name: "贵州茅台", mainNetInflow: -100_000 },
+      ],
+    });
+  });
+
+  it("retries a dropped ranking connection once", async () => {
+    let calls = 0;
+    const result = await queryEastmoneyMainFundFlowRank({
+      direction: "inflow",
+      limit: 1,
+      fetchImpl: async () => {
+        calls += 1;
+        throw new Error("fetch failed");
+      },
+    });
+    expect(calls).toBe(2);
+    expect(result).toMatchObject({ success: false, message: "fetch failed", rows: [] });
+  });
+
+  it("ranks inflows with descending order and rejects an invalid limit", async () => {
+    let requested = "";
+    const result = await queryEastmoneyMainFundFlowRank({
+      direction: "inflow",
+      fetchImpl: async (input) => {
+        requested = String(input);
+        return new Response(JSON.stringify({ data: { total: 1, diff: [{ f12: "002371", f14: "北方华创", f62: 470_072_416 }] } }), { status: 200 });
+      },
+    });
+    expect(new URL(requested).searchParams.get("po")).toBe("1");
+    expect(new URL(requested).searchParams.get("pz")).toBe("20");
+    expect(result.rows[0]).toMatchObject({ rank: 1, symbol: "002371.SZ", mainNetInflow: 470_072_416 });
+    await expect(queryEastmoneyMainFundFlowRank({ direction: "inflow", limit: 51, fetchImpl: async () => new Response("{}") })).rejects.toThrow("1 to 50");
   });
 
   it("falls back to daykline when the batch ulist endpoint fails", async () => {

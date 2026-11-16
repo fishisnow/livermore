@@ -6,7 +6,10 @@ import type { NormalizedMarketQuote } from "./normalized-market.js";
 setDefaultResultOrder("ipv4first");
 
 const EASTMONEY_ULIST_URL = "https://push2.eastmoney.com/api/qt/ulist.np/get";
+const EASTMONEY_CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get";
 const EASTMONEY_DAYKLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get";
+const EASTMONEY_A_SHARE_FS = "m:0+t:6+f:!2,m:0+t:13+f:!2,m:0+t:80+f:!2,m:1+t:2+f:!2,m:1+t:23+f:!2";
+const EASTMONEY_CLIST_UT = "b2884a393a59ad64002292a3e90d46a5";
 const EASTMONEY_REFERER = "https://data.eastmoney.com/zjlx/detail.html";
 const EASTMONEY_FIELDS = [
   "f12", // code
@@ -49,6 +52,34 @@ export interface EastmoneyFundFlowResult {
   success: boolean;
   message?: string;
   rows: EastmoneyFundFlowRow[];
+}
+
+export type EastmoneyMainFundFlowRankDirection = "inflow" | "outflow";
+
+export interface EastmoneyMainFundFlowRankRow {
+  rank: number;
+  symbol: string;
+  code: string;
+  name?: string;
+  price?: number;
+  changePct?: number;
+  mainNetInflow?: number;
+  mainNetInflowPct?: number;
+  superLargeNetInflow?: number;
+  largeNetInflow?: number;
+  updatedAt?: string;
+}
+
+export interface EastmoneyMainFundFlowRankResult {
+  source: "eastmoney";
+  endpoint: string;
+  market: "沪深A股";
+  direction: EastmoneyMainFundFlowRankDirection;
+  amountUnit: "CNY";
+  success: boolean;
+  message?: string;
+  total?: number;
+  rows: EastmoneyMainFundFlowRankRow[];
 }
 
 interface EastmoneyUlistResponse {
@@ -129,6 +160,53 @@ export async function queryEastmoneyMainFundFlow(
     success: false,
     message: batch.message || errors.join("; ") || "East Money returned no fund-flow rows.",
     rows: [],
+  };
+}
+
+export async function queryEastmoneyMainFundFlowRank(
+  options: { direction: EastmoneyMainFundFlowRankDirection; limit?: number; fetchImpl?: typeof fetch },
+): Promise<EastmoneyMainFundFlowRankResult> {
+  if (options.direction !== "inflow" && options.direction !== "outflow") {
+    throw new Error("direction must be inflow or outflow.");
+  }
+  const limit = options.limit ?? 20;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+    throw new Error("limit must be an integer from 1 to 50.");
+  }
+  const url = new URL(EASTMONEY_CLIST_URL);
+  url.searchParams.set("fid", "f62");
+  url.searchParams.set("po", options.direction === "inflow" ? "1" : "0");
+  url.searchParams.set("pz", String(limit));
+  url.searchParams.set("pn", "1");
+  url.searchParams.set("np", "1");
+  url.searchParams.set("fltt", "2");
+  url.searchParams.set("invt", "2");
+  url.searchParams.set("ut", EASTMONEY_CLIST_UT);
+  url.searchParams.set("fs", EASTMONEY_A_SHARE_FS);
+  url.searchParams.set("fields", "f12,f14,f2,f3,f62,f184,f66,f72,f124");
+  const payload = await fetchJson<EastmoneyUlistResponse>(url, options.fetchImpl ?? fetch, 2);
+  if (!payload.ok) {
+    return {
+      source: "eastmoney",
+      endpoint: EASTMONEY_CLIST_URL,
+      market: "沪深A股",
+      direction: options.direction,
+      amountUnit: "CNY",
+      success: false,
+      message: payload.message,
+      rows: [],
+    };
+  }
+  const total = numericValue(payload.value.data?.total);
+  return {
+    source: "eastmoney",
+    endpoint: EASTMONEY_CLIST_URL,
+    market: "沪深A股",
+    direction: options.direction,
+    amountUnit: "CNY",
+    success: true,
+    ...(total === undefined ? {} : { total }),
+    rows: parseEastmoneyRankRows(payload.value),
   };
 }
 
@@ -249,9 +327,10 @@ async function queryDayKline(
 async function fetchJson<T>(
   url: URL,
   fetchImpl: typeof fetch,
+  attempts = 3,
 ): Promise<{ ok: true; value: T } | { ok: false; message: string }> {
   let lastError = "East Money request failed";
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const response = await fetchImpl(url, {
         headers: {
@@ -269,7 +348,7 @@ async function fetchJson<T>(
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
-    await sleep(250 * (attempt + 1));
+    if (attempt + 1 < attempts) await sleep(250 * (attempt + 1));
   }
   return { ok: false, message: lastError };
 }
@@ -331,6 +410,39 @@ function parseEastmoneyRows(payload: EastmoneyUlistResponse): EastmoneyFundFlowR
         source: "eastmoney",
         endpoint: "data.eastmoney.com/zjlx",
       },
+    });
+  }
+  return rows;
+}
+
+function parseEastmoneyRankRows(payload: EastmoneyUlistResponse): EastmoneyMainFundFlowRankRow[] {
+  const diff = payload.data?.diff;
+  const items = Array.isArray(diff) ? diff : diff && typeof diff === "object" ? Object.values(diff) : [];
+  const rows: EastmoneyMainFundFlowRankRow[] = [];
+  for (const item of items) {
+    const code = textValue(item.f12);
+    if (!code) continue;
+    const symbol = normalizeSecurityCode(code) ?? code;
+    const name = textValue(item.f14);
+    const price = numericValue(item.f2);
+    const changePct = numericValue(item.f3);
+    const mainNetInflow = numericValue(item.f62);
+    const mainNetInflowPct = numericValue(item.f184);
+    const superLargeNetInflow = numericValue(item.f66);
+    const largeNetInflow = numericValue(item.f72);
+    const updatedAt = timestampValue(item.f124);
+    rows.push({
+      rank: rows.length + 1,
+      symbol,
+      code,
+      ...(name ? { name } : {}),
+      ...(price === undefined ? {} : { price }),
+      ...(changePct === undefined ? {} : { changePct }),
+      ...(mainNetInflow === undefined ? {} : { mainNetInflow }),
+      ...(mainNetInflowPct === undefined ? {} : { mainNetInflowPct }),
+      ...(superLargeNetInflow === undefined ? {} : { superLargeNetInflow }),
+      ...(largeNetInflow === undefined ? {} : { largeNetInflow }),
+      ...(updatedAt ? { updatedAt } : {}),
     });
   }
   return rows;

@@ -502,7 +502,7 @@ ${JSON.stringify(positions.map((position) => ({
 必须先读取 futuapi Skill，再通过 query_futu_market 获取全部标的的行情和技术指标。
 取得证券简称后，必须调用 query_futu_news 查询全部持仓的最新新闻、公告或评级，并将最重要的消息纳入飞书风险摘要。
 ${mainlandSymbols.length > 0
-    ? `A 股持仓：${mainlandSymbols.join("、")}。仅针对这些代码调用 query_a_share_main_fund_flow，从东方财富数据中心获取主力净流入及超大单/大单/中单/小单明细。`
+    ? `A 股持仓：${mainlandSymbols.join("、")}。仅针对这些代码调用 query_a_share_main_fund_flow，从东方财富数据中心获取主力净流入及超大单/大单/中单/小单明细。不要调用 query_a_share_main_fund_flow_rank。`
     : "本次没有 A 股持仓，不得调用东方财富资金流向查询。"}
 港股不适用“主力净流入”指标：不得查询、展示或推断港股主力净流入。
 

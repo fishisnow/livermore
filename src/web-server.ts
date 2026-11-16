@@ -303,7 +303,7 @@ async function capabilitySnapshot(refresh = false) {
         kind: "Public HTTP",
         endpoint: "https://data.eastmoney.com/zjlx/",
         status: "configured",
-        description: "查询 A 股主力净流入及超大单/大单/中单/小单明细；无需付费 API Key。",
+        description: "按代码查询 A 股主力净流入及档位明细，或查询沪深 A 股主力净流入、净流出排名；无需付费 API Key。",
       },
       {
         name: "公开财经网页",

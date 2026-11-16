@@ -1695,7 +1695,6 @@ body[data-view="tasks"] .capability-section { display:block; }
 .task-config-footer { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:18px 0; margin-top:20px; border-top:1px solid var(--line); position:sticky; bottom:0; background:var(--surface); }
 #task-config-error { font-size:11px; color:var(--red); line-height:1.6; }
 .primary-button { border-radius:7px; background:var(--accent); color:#fff; padding:9px 18px; font-size:12px; white-space:nowrap; }
-#notification-run { margin-top:22px; }
 @media (max-width:800px) {
   .task-editor-grid { grid-template-columns:minmax(0,1fr); gap:18px; }
   .task-schedule-editor { border-right:0; padding-right:0; }

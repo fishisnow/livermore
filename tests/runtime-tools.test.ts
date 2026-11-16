@@ -73,6 +73,10 @@ describe("interactive Agent runtime tools", () => {
     expect(tools.find((item) => item.name === "query_futu_news")).toBeDefined();
     const fundFlowTool = tools.find((item) => item.name === "query_a_share_main_fund_flow");
     expect(fundFlowTool).toBeDefined();
+    const rankTool = tools.find((item) => item.name === "query_a_share_main_fund_flow_rank");
+    expect(rankTool).toBeDefined();
+    const invalidRank = await rankTool!.execute("tool-call", { direction: "sideways" });
+    expect("isError" in invalidRank && invalidRank.isError).toBe(true);
     const result = await fundFlowTool!.execute("tool-call", { symbols: ["HK00700"] });
     expect("isError" in result && result.isError).toBe(true);
     expect(result.content[0]).toMatchObject({

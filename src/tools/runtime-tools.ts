@@ -12,7 +12,7 @@ import {
   queryFutuMarket,
   queryFutuNews,
 } from "../market/futu-client.js";
-import { queryEastmoneyMainFundFlow } from "../market/eastmoney-fund-flow.js";
+import { queryEastmoneyMainFundFlow, queryEastmoneyMainFundFlowRank } from "../market/eastmoney-fund-flow.js";
 import { isMainlandSecurity, normalizeSecurityCode } from "../market/normalized-market.js";
 import { projectRoot, projectSkillsDirectory, reportsDirectory } from "../project-paths.js";
 import type { InvestmentDatabase } from "../storage/database.js";
@@ -57,6 +57,14 @@ const securityListParameters = Type.Object({
     minItems: 1,
     maxItems: 50,
   }),
+});
+
+const fundFlowRankParameters = Type.Object({
+  direction: Type.Union([
+    Type.Literal("inflow"),
+    Type.Literal("outflow"),
+  ], { description: "inflow ranks by main-force net inflow descending. outflow ranks by main-force net inflow ascending, so the largest net outflow is first." }),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, description: "How many ranked securities to return. Defaults to 20." })),
 });
 
 const futuNewsParameters = Type.Object({
@@ -124,6 +132,24 @@ export function createRuntimeTools(
         try {
           const result = await queryEastmoneyMainFundFlow(symbols);
           hooks.onFundFlowResult?.(symbols, result);
+          return textResult(JSON.stringify(result, null, 2), !result.success);
+        } catch (error) {
+          return textResult(errorMessage(error), true);
+        }
+      },
+    } satisfies AgentTool<any>,
+    {
+      name: "query_a_share_main_fund_flow_rank",
+      label: "Query A-share main fund flow rank",
+      description: "Rank mainland Shanghai and Shenzhen A-shares by today's East Money main-force net inflow. direction=inflow returns the largest net inflows first; direction=outflow returns the largest net outflows first. Amounts are CNY. Price and daily change in this ranking come from East Money and must not replace Futu quotes. Do not use this tool for a named holding, Hong Kong securities, RSI, or MACD; use query_a_share_main_fund_flow for specific A-share symbols.",
+      parameters: fundFlowRankParameters,
+      async execute(_id, rawParams) {
+        const params = rawParams as { direction: "inflow" | "outflow"; limit?: number };
+        try {
+          const result = await queryEastmoneyMainFundFlowRank({
+            direction: params.direction,
+            ...(params.limit === undefined ? {} : { limit: params.limit }),
+          });
           return textResult(JSON.stringify(result, null, 2), !result.success);
         } catch (error) {
           return textResult(errorMessage(error), true);
