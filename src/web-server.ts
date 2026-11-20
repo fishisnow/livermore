@@ -170,10 +170,17 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   } else if (request.method === "GET" && url.pathname === "/api/charts/rise-fall") {
     sendJson(response, 200, await queryAshareRiseFall({ config }));
   } else if (request.method === "GET" && url.pathname === "/api/portfolio") {
-    sendJson(response, 200, { positions: database.listPositions() });
+    sendJson(response, 200, { positions: database.listPositions(), atrStopMultiplier: database.getAtrStopMultiplier() });
+  } else if (request.method === "PUT" && url.pathname === "/api/portfolio/settings") {
+    const body = await readJsonBody(request) as { atrStopMultiplier?: unknown };
+    const value = body.atrStopMultiplier;
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > 20) {
+      return sendJson(response, 400, { error: "ATR 倍数必须是大于 0 且不超过 20 的数字。" });
+    }
+    sendJson(response, 200, { atrStopMultiplier: database.setAtrStopMultiplier(value) });
   } else if (request.method === "POST" && url.pathname === "/api/portfolio") {
     const input = parsePositionInput(await readJsonBody(request));
-    const stop = await entryAtrStop(config, input.symbol);
+    const stop = await entryAtrStop(config, input.symbol, database.getAtrStopMultiplier());
     sendJson(response, 201, database.createPosition({ ...input, ...stop }));
   } else if (request.method === "PUT" && url.pathname.startsWith("/api/portfolio/")) {
     const id = decodeURIComponent(url.pathname.slice("/api/portfolio/".length));

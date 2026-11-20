@@ -118,7 +118,7 @@ export interface PortfolioPositionInput {
   alertAbove?: number | null;
   /** 最新价下跌到该价时提醒；空表示不启用。 */
   alertBelow?: number | null;
-  /** 添加持仓时按当时行情计算，之后不再改写。 */
+  /** 最近一次巡检按最新价 − N × ATR 写入；手动修改持仓时保留。 */
   atr?: number | null;
   atrStopLoss?: number | null;
 }
@@ -515,6 +515,27 @@ export class InvestmentDatabase {
     return this.getPosition(id);
   }
 
+  updatePositionAtrStop(id: string, atr: number, atrStopLoss: number): void {
+    this.db.prepare(`
+      UPDATE portfolio_positions SET atr = ?, atr_stop_loss = ?, updated_at = ? WHERE id = ?
+    `).run(atr, atrStopLoss, new Date().toISOString(), id);
+  }
+
+  getAtrStopMultiplier(): number {
+    const row = this.db.prepare("SELECT value FROM app_meta WHERE key = ?").get(ATR_STOP_MULTIPLIER_KEY) as { value: string } | undefined;
+    const value = row ? Number(row.value) : 2;
+    return Number.isFinite(value) && value > 0 && value <= 20 ? value : 2;
+  }
+
+  setAtrStopMultiplier(value: number): number {
+    if (!Number.isFinite(value) || value <= 0 || value > 20) throw new Error("ATR 倍数必须是大于 0 且不超过 20 的数字。");
+    this.db.prepare(`
+      INSERT INTO app_meta (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(ATR_STOP_MULTIPLIER_KEY, String(value));
+    return value;
+  }
+
   setPriceAlertFired(id: string, side: "above" | "below", firedAt: string | null): void {
     const column = side === "above" ? "alert_above_fired_at" : "alert_below_fired_at";
     this.db.prepare(`UPDATE portfolio_positions SET ${column} = ? WHERE id = ?`).run(firedAt, id);
@@ -801,6 +822,8 @@ export class InvestmentDatabase {
     }
   }
 }
+
+const ATR_STOP_MULTIPLIER_KEY = "portfolio.atr_stop_multiplier";
 
 function mapMcpServer(row: unknown): McpServerRecord {
   const value = row as Record<string, string | number | null>;

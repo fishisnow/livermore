@@ -229,6 +229,10 @@
       <div><span>警告</span><strong id="portfolio-warning-count">0</strong></div>
       <div><span>严重</span><strong id="portfolio-critical-count">0</strong></div>
       <p id="portfolio-last-check">尚未执行风险巡检</p>
+      <label class="atr-multiplier" for="atr-stop-multiplier">ATR 倍数
+        <input id="atr-stop-multiplier" type="number" min="0.1" max="20" step="0.1" value="2" inputmode="decimal" aria-describedby="atr-stop-hint">
+        <small id="atr-stop-hint">止损价 = 最新价 − N × ATR，每次巡检重算</small>
+      </label>
     </div>
     <form class="position-form" id="position-form">
       <input id="position-id" type="hidden">
@@ -263,6 +267,18 @@
     </form>
     <div class="portfolio-table-wrap">
       <table class="portfolio-table">
+        <colgroup>
+          <col class="col-symbol">
+          <col class="col-qty">
+          <col class="col-price">
+          <col class="col-price">
+          <col class="col-price">
+          <col class="col-alert">
+          <col class="col-change">
+          <col class="col-change">
+          <col class="col-risk">
+          <col class="col-actions">
+        </colgroup>
         <thead>
           <tr>
             <th>标的</th>

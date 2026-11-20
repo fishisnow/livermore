@@ -1539,9 +1539,31 @@ dialog::backdrop {
   color:var(--red)
 }
 .portfolio-summary p {
-  margin-left:auto;
+  margin:0 0 0 18px;
   font-size:10px;
   color:var(--muted)
+}
+.atr-multiplier {
+  margin-left:auto;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  color:var(--muted);
+  font-size:12px;
+  white-space:nowrap
+}
+.atr-multiplier input {
+  width:64px;
+  height:30px;
+  border:1px solid var(--line);
+  border-radius:6px;
+  background:var(--canvas);
+  padding:0 8px;
+  font-variant-numeric:tabular-nums
+}
+.atr-multiplier small {
+  color:var(--faint);
+  font-size:11px
 }
 .position-form {
   display:flex;
@@ -1587,25 +1609,33 @@ dialog::backdrop {
 }
 .portfolio-table {
   width:100%;
+  table-layout:fixed;
   border-collapse:collapse;
   font-size:12px;
   text-align:left;
   font-variant-numeric:tabular-nums
 }
+.portfolio-table .col-symbol { width:16% }
+.portfolio-table .col-qty { width:7% }
+.portfolio-table .col-price { width:9% }
+.portfolio-table .col-alert { width:13% }
+.portfolio-table .col-change { width:8% }
+.portfolio-table .col-actions { width:52px }
 .portfolio-table th {
   font-size:10px;
   color:var(--muted);
   background:var(--subtle);
   font-weight:500;
-  padding:12px;
+  padding:10px 8px;
   white-space:nowrap
 }
 .portfolio-table td {
   border-top:1px solid var(--soft-line);
-  padding:15px 12px;
-  white-space:nowrap;
-  vertical-align:top
+  padding:12px 8px;
+  vertical-align:top;
+  overflow-wrap:anywhere
 }
+.portfolio-table td.num { white-space:nowrap }
 .portfolio-table td strong {
   font-size:12px;
   font-weight:600
@@ -1648,8 +1678,7 @@ dialog::backdrop {
 }
 .portfolio-table td small.risk-summary {
   white-space:normal;
-  max-width:240px;
-  min-width:120px
+  min-width:0
 }
 .alert-hit {
   color:var(--amber)
@@ -1987,6 +2016,12 @@ dialog::backdrop {
   .portfolio-summary p {
     width:100%;
     margin-left:0
+  }
+  .atr-multiplier {
+    width:100%;
+    margin-left:0;
+    flex-wrap:wrap;
+    white-space:normal
   }
   .position-form > div:not(.position-form-actions) {
     flex:1 1 calc(50% - 12px)

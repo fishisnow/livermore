@@ -82,6 +82,10 @@ describe("portfolio ledger", () => {
     expect(database.deletePosition(created.id)).toBe(true);
     expect(database.deletePosition(stopped.id)).toBe(true);
     expect(database.listPositions()).toEqual([]);
+    expect(database.getAtrStopMultiplier()).toBe(2);
+    expect(database.setAtrStopMultiplier(2.5)).toBe(2.5);
+    expect(database.getAtrStopMultiplier()).toBe(2.5);
+    expect(() => database.setAtrStopMultiplier(0)).toThrow(/ATR 倍数/);
     database.close();
   });
 
@@ -301,7 +305,7 @@ describe("portfolio risk policy", () => {
               rsi: 35,
               macd: -0.12,
               atr: 0.42,
-              atrStopLoss: 9.96,
+              atrStopLoss: 8,
               raw: { klineCount: 120 },
             }],
           }],
@@ -344,8 +348,8 @@ describe("portfolio risk policy", () => {
       expect(database.listPositions()[0]).toMatchObject({
         latestName: "平安银行",
         latestPrice: 10.8,
-        atr: 0.5,
-        atrStopLoss: 9.5,
+        atr: 0.42,
+        atrStopLoss: 9.96,
         severity: "critical",
       });
       const report = await readFile(result.reportPath, "utf8");
@@ -355,8 +359,9 @@ describe("portfolio risk policy", () => {
       expect(alert?.body).not.toContain("飞书");
       expect(report).toContain("Agent 辅助研判");
       expect(report).toContain("ATR止损");
-      expect(report).toContain("9.50");
-      expect(report).not.toContain("9.96");
+      expect(report).toContain("9.96");
+      expect(report).not.toContain("9.50");
+      expect(report).not.toContain("8.00");
       expect(report).not.toContain("99.99");
     } finally {
       await telemetry.shutdown();

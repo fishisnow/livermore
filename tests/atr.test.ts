@@ -5,6 +5,7 @@ import {
   atrStopFromDailyBars,
   calculateStopLoss,
   calculateWilderATR,
+  portfolioAtrStop,
   type CandleBar,
 } from "../src/market/atr.js";
 
@@ -44,6 +45,9 @@ describe("ATR stop loss", () => {
     const atr = calculateWilderATR(bars, 3);
     expect(atr).toBeCloseTo((7 / 3 * 2 + 1) / 3, 10);
     expect(calculateStopLoss(10.5, atr!, 2)).toBeCloseTo(10.5 - 2 * atr!, 10);
+    expect(portfolioAtrStop(10.8, 0.42, 2)).toBeCloseTo(9.96, 10);
+    expect(portfolioAtrStop(10.8, 0.42, 3)).toBeCloseTo(9.54, 10);
+    expect(portfolioAtrStop(10.8, 0, 2)).toBeNull();
   });
 
   it("sorts daily bars and ignores unusable candles before calculating the stop", () => {

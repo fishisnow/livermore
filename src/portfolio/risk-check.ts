@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Context } from "@opentelemetry/api";
 import { createInvestmentAgent } from "../agent/create-investment-agent.js";
 import type { AppConfig } from "../config.js";
+import { portfolioAtrStop } from "../market/atr.js";
 import type { FutuMarketResult } from "../market/futu-client.js";
 import type { EastmoneyFundFlowResult } from "../market/eastmoney-fund-flow.js";
 import {
@@ -194,6 +195,7 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
       rootSpan.setAttribute("livermore.market.normalized_quote_count", marketQuotes.length);
       const fundFlowUnavailable = agentResult.fundFlowResults.some((result) => !result.success);
       rootSpan.setAttribute("livermore.eastmoney.fund_flow_unavailable", fundFlowUnavailable);
+      const atrStopMultiplier = database.getAtrStopMultiplier();
       const assessed: AssessedPosition[] = [];
       for (const position of positions) {
         assessed.push(await telemetry.withSpan("portfolio.position_check", {
@@ -202,11 +204,14 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
           "livermore.position.symbol": position.symbol,
         }, async (span) => {
           const value = assessPosition(position, marketQuotes);
+          const atrStop = atrStopForAssessment(value, atrStopMultiplier);
+          if (atrStop) database.updatePositionAtrStop(position.id, atrStop.atr, atrStop.atrStopLoss);
           span.setAttributes({
             "livermore.risk.severity": value.severity,
             "livermore.risk.signal_count": value.signals.length,
             ...(value.pnlPct === undefined ? {} : { "livermore.position.pnl_pct": value.pnlPct }),
             ...(value.dayChangePct === undefined ? {} : { "livermore.position.day_change_pct": value.dayChangePct }),
+            ...(atrStop ? { "livermore.position.atr_stop_loss": atrStop.atrStopLoss } : {}),
           });
           const saved = database.savePositionRiskCheck({
             runId,
@@ -217,13 +222,14 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
             ...(value.pnlPct === undefined ? {} : { pnlPct: value.pnlPct }),
             ...(value.dayChangePct === undefined ? {} : { dayChangePct: value.dayChangePct }),
             ...(value.mainNetInflow === undefined ? {} : { mainNetInflow: value.mainNetInflow }),
+            ...(atrStop ? { atr: atrStop.atr, atrStopLoss: atrStop.atrStopLoss } : {}),
             severity: value.severity,
             signals: value.signals,
             rawData: value.rawData,
           });
           return {
             ...value,
-            position,
+            position: atrStop ? { ...position, atr: atrStop.atr, atrStopLoss: atrStop.atrStopLoss } : position,
             checkId: saved.id,
             shouldAlert: shouldSendAlert(value.severity, saved.previousSeverity, saved.lastAlertedAt, now),
           };
@@ -511,6 +517,18 @@ ${mainlandSymbols.length > 0
 3. 持仓说明里每只两句话：为什么是这个建议，以及建议何时失效。
 4. 不要另写研究过程章节，也不要复述行情数字。
 5. 最终输出只基于工具结果，不构成投资建议。`;
+}
+
+function atrStopForAssessment(
+  value: { currentPrice?: number; rawData: unknown },
+  multiplier: number,
+): { atr: number; atrStopLoss: number } | null {
+  if (!value.rawData || typeof value.rawData !== "object" || !("atr" in value.rawData)) return null;
+  const atr = (value.rawData as { atr?: unknown }).atr;
+  if (typeof atr !== "number" || value.currentPrice === undefined) return null;
+  const stop = portfolioAtrStop(value.currentPrice, atr, multiplier);
+  if (stop === null) return null;
+  return { atr, atrStopLoss: Math.round((stop + Number.EPSILON) * 1_000_000) / 1_000_000 };
 }
 
 export function evaluateRisk(input: {

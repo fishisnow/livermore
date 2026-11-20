@@ -58,6 +58,15 @@ export function calculateStopLoss(currentPrice: number, atr: number, multiplier 
   return currentPrice - multiplier * atr;
 }
 
+/** 最新价 − N × 最新 ATR。价格、ATR 或倍数无效时不产出止损价。 */
+export function portfolioAtrStop(currentPrice: number, atr: number, multiplier: number): number | null {
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) return null;
+  if (!Number.isFinite(atr) || atr <= 0) return null;
+  if (!Number.isFinite(multiplier) || multiplier <= 0) return null;
+  const stop = calculateStopLoss(currentPrice, atr, multiplier);
+  return Number.isFinite(stop) ? stop : null;
+}
+
 export function atrStopFromDailyBars(
   bars: DailyBarInput[],
   currentPrice: number,

@@ -325,6 +325,7 @@ document.querySelector("#close-portfolio-dialog").addEventListener("click", () =
 document.querySelector("#position-form").addEventListener("submit", savePosition);
 document.querySelector("#cancel-position-edit").addEventListener("click", resetPositionForm);
 document.querySelector("#run-portfolio-check").addEventListener("click", runPortfolioCheck);
+document.querySelector("#atr-stop-multiplier").addEventListener("change", saveAtrMultiplier);
 document.querySelector("#capability-details").addEventListener("click", () => openCapabilities(true));
 document.querySelector("#close-capability-dialog").addEventListener("click", () => setView("chat"));
 document.querySelector("#refresh-capabilities").addEventListener("click", () => openCapabilities(true));
@@ -1377,6 +1378,31 @@ async function deleteChat(id) {
   } catch (error) { showToast(`删除失败：${error.message}`); }
 }
 
+async function saveAtrMultiplier() {
+  const input = document.querySelector("#atr-stop-multiplier");
+  const value = Number(input.value);
+  if (!Number.isFinite(value) || value <= 0 || value > 20) {
+    showToast("ATR 倍数需要大于 0，且不超过 20");
+    return;
+  }
+  input.disabled = true;
+  try {
+    const response = await fetch("/api/portfolio/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ atrStopMultiplier: value }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    input.value = String(result.atrStopMultiplier);
+    showToast("ATR 倍数已保存，下次巡检按新倍数重算止损");
+  } catch (error) {
+    showToast(`ATR 倍数保存失败：${error.message}`);
+  } finally {
+    input.disabled = false;
+  }
+}
+
 async function openPortfolio() {
   await setView("portfolio");
 }
@@ -1387,6 +1413,8 @@ async function loadPortfolio() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     state.positions = data.positions;
+    const multiplier = document.querySelector("#atr-stop-multiplier");
+    if (document.activeElement !== multiplier) multiplier.value = String(data.atrStopMultiplier ?? 2);
     renderPortfolio(data.positions);
   } catch (error) {
     showToast(`持仓读取失败：${error.message}`);
@@ -1412,13 +1440,13 @@ function renderPortfolio(positions) {
         <strong>${escapeHtml(position.latestName || position.symbol)}</strong>
         <small>${escapeHtml(position.symbol)} · ${formatPurchaseDate(position.purchasedAt)} 买入</small>
       </td>
-      <td data-label="数量">${formatQuantity(position.quantity)}</td>
-      <td data-label="成本">${formatPrice(position.costBasis)}</td>
-      <td data-label="最新价">${position.latestPrice == null ? "—" : formatPrice(position.latestPrice)}</td>
-      <td data-label="ATR止损">${renderAtrStop(position)}</td>
+      <td class="num" data-label="数量">${formatQuantity(position.quantity)}</td>
+      <td class="num" data-label="成本">${formatPrice(position.costBasis)}</td>
+      <td class="num" data-label="最新价">${position.latestPrice == null ? "—" : formatPrice(position.latestPrice)}</td>
+      <td class="num" data-label="ATR止损">${renderAtrStop(position)}</td>
       <td data-label="价格预警">${renderPriceAlerts(position)}</td>
-      <td data-label="持仓盈亏" class="${changeClass(position.pnlPct)}">${formatChange(position.pnlPct)}</td>
-      <td data-label="当日" class="${changeClass(position.dayChangePct)}">${formatChange(position.dayChangePct)}</td>
+      <td data-label="持仓盈亏" class="num ${changeClass(position.pnlPct)}">${formatChange(position.pnlPct)}</td>
+      <td data-label="当日" class="num ${changeClass(position.dayChangePct)}">${formatChange(position.dayChangePct)}</td>
       <td data-label="风险状态">
         <span class="risk-badge ${escapeHtml(position.severity || "unchecked")}">${riskLabel(position.severity)}</span>
         <small class="risk-summary">${escapeHtml(position.riskSummary || "等待首次巡检")}</small>
