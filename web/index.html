@@ -10,6 +10,7 @@
       document.documentElement.dataset.theme = preference === "system"
         ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : preference;
       document.documentElement.dataset.moyu = localStorage.getItem("livermore.moyu") === "on" ? "on" : "off";
+      document.documentElement.dataset.sidebar = localStorage.getItem("livermore.sidebar") || "expanded";
     } catch { /* Use the system default if storage is unavailable. */ }
   </script>
   <title>Livermore · 本地投资 Agent</title>
@@ -30,30 +31,49 @@
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
     <symbol id="i-trace" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
     <symbol id="i-panels" viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="10" width="8" height="11" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+    <symbol id="i-collapse" viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 8h.01"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol id="i-compose" viewBox="0 0 24 24"><path d="M12 20h8"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
   </defs></svg>
   <div class="app-frame">
-    <aside class="sidebar" aria-label="主导航">
-      <div class="sidebar-brand"><span class="brand-mark" aria-hidden="true">L</span><div><strong>Livermore</strong><span>投资研究工作台</span></div></div>
-      <button class="sidebar-new" id="sidebar-new" type="button" title="新对话"><svg class="icon"><use href="#i-plus"/></svg><span>新对话</span><kbd>⌘N</kbd></button>
-      <p class="sidebar-label">工作区</p>
-      <nav class="sidebar-nav">
-        <button class="nav-item selected" data-view-target="chat" type="button" aria-current="page" title="研究对话"><svg class="icon"><use href="#i-chat"/></svg><span>研究对话</span></button>
-        <button class="nav-item" data-view-target="portfolio" type="button" title="我的持仓"><svg class="icon"><use href="#i-chart"/></svg><span>我的持仓</span><span class="nav-count" id="nav-position-count">—</span></button>
-        <button class="nav-item" data-view-target="tasks" type="button" title="定时任务"><svg class="icon"><use href="#i-tasks"/></svg><span>定时任务</span><span class="nav-count" id="nav-task-count">3</span></button>
-        <button class="nav-item" data-view-target="charts" type="button" title="图表"><svg class="icon"><use href="#i-panels"/></svg><span>图表</span></button>
-        <button class="nav-item" data-view-target="capabilities" type="button" title="研究能力"><svg class="icon"><use href="#i-grid"/></svg><span>研究能力</span></button>
-        <a class="nav-item" id="trace-link" href="http://localhost:6006" target="_blank" rel="noreferrer" title="打开 Trace 观测台"><svg class="icon"><use href="#i-trace"/></svg><span>Trace 观测</span><span class="nav-external" aria-hidden="true">↗</span></a>
-      </nav>
-      <section class="chat-history" aria-label="历史会话"><div class="section-label"><span>历史会话</span><button id="refresh-chats" type="button" aria-label="刷新历史会话">↻</button></div><div id="chat-history-list"></div><button id="more-chats" type="button" hidden>加载更早会话</button></section>
-      <div class="sidebar-bottom">
-        <div class="workspace-status">
-          <span class="live-dot" aria-hidden="true"></span>
-          <span><strong>本地工作区</strong><small>数据保存在这台 Mac</small></span>
-        </div>
-        <label class="appearance-control" for="appearance"><svg class="icon"><use href="#i-sun"/></svg><span>外观</span><select id="appearance" aria-label="应用外观"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label>
-        <button class="nav-item" id="moyu-mode" type="button" aria-pressed="false" title="摸鱼模式"><svg class="icon"><use href="#i-fish"/></svg><span>摸鱼模式</span></button>
-        <button class="nav-item native-only" id="native-settings" type="button" title="设置"><svg class="icon"><use href="#i-gear"/></svg><span>设置</span><kbd>⌘,</kbd></button>
+    <nav class="app-rail" aria-label="主导航">
+      <div class="rail-group">
+        <button class="rail-button selected" data-view-target="chat" type="button" aria-current="page" title="研究对话"><svg class="icon"><use href="#i-chat"/></svg></button>
+        <button class="rail-button" data-view-target="portfolio" type="button" title="我的持仓"><svg class="icon"><use href="#i-chart"/></svg><span class="rail-count" id="nav-position-count"></span></button>
+        <button class="rail-button" data-view-target="tasks" type="button" title="定时任务"><svg class="icon"><use href="#i-tasks"/></svg><span class="rail-count" id="nav-task-count"></span></button>
+        <button class="rail-button" data-view-target="charts" type="button" title="图表"><svg class="icon"><use href="#i-panels"/></svg></button>
+        <button class="rail-button" data-view-target="capabilities" type="button" title="研究能力"><svg class="icon"><use href="#i-grid"/></svg></button>
+        <a class="rail-button" id="trace-link" href="http://localhost:6006" target="_blank" rel="noreferrer" title="Trace 观测"><svg class="icon"><use href="#i-trace"/></svg></a>
       </div>
+      <div class="rail-group rail-foot">
+        <button class="rail-button" id="appearance-button" type="button" title="外观" aria-label="外观" aria-haspopup="menu" aria-expanded="false"><svg class="icon"><use href="#i-sun"/></svg></button>
+        <button class="rail-button" id="moyu-mode" type="button" aria-pressed="false" aria-label="摸鱼模式" title="摸鱼模式"><svg class="icon"><use href="#i-fish"/></svg></button>
+        <button class="rail-button native-only" id="native-settings" type="button" title="设置" aria-label="设置"><svg class="icon"><use href="#i-gear"/></svg></button>
+        <span class="rail-status" title="本地工作区 · 数据保存在这台 Mac"><span class="live-dot" aria-hidden="true"></span></span>
+      </div>
+      <div class="rail-popover" id="appearance-menu" role="menu" hidden>
+        <button type="button" role="menuitemradio" data-appearance="system">跟随系统</button>
+        <button type="button" role="menuitemradio" data-appearance="light">浅色</button>
+        <button type="button" role="menuitemradio" data-appearance="dark">深色</button>
+      </div>
+      <select id="appearance" class="sr-only" aria-label="应用外观" tabindex="-1"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select>
+    </nav>
+    <aside class="sidebar" aria-label="历史对话">
+      <div class="sidebar-head">
+        <strong>Livermore</strong>
+        <span class="sidebar-head-actions">
+          <button class="icon-button" id="history-search-toggle" type="button" title="搜索对话" aria-label="搜索对话"><svg class="icon"><use href="#i-search"/></svg></button>
+          <button class="icon-button" id="sidebar-collapse" type="button" title="关闭侧边栏" aria-label="关闭侧边栏"><svg class="icon"><use href="#i-sidebar"/></svg></button>
+        </span>
+      </div>
+      <label class="history-search" id="history-search" hidden><input id="history-query" type="search" placeholder="搜索对话" aria-label="搜索对话"></label>
+      <button class="sidebar-new" id="sidebar-new" type="button" title="新聊天 ⌘N"><svg class="icon"><use href="#i-compose"/></svg><span>新聊天</span></button>
+      <section class="chat-history" aria-label="最近"><div class="section-label"><svg class="icon"><use href="#i-clock"/></svg><span>最近</span></div><div id="chat-history-list"></div><button id="more-chats" type="button" hidden>加载更早会话</button></section>
+      <div id="history-menu" class="history-menu" role="menu" hidden><button type="button" id="history-delete" role="menuitem">删除</button></div>
     </aside>
     <header class="topbar">
       <div class="toolbar-leading"><button class="icon-button" id="toggle-sidebar" title="切换侧边栏" aria-label="切换侧边栏"><svg class="icon"><use href="#i-sidebar"/></svg></button><div class="toolbar-title"><strong id="view-title">研究对话</strong><span id="view-subtitle">与你的本地投资 Agent 一起研究</span></div></div>
@@ -143,6 +163,8 @@
       </section>
 
       <section class="charts-page" aria-label="图表">
+        <p class="chart-grid-key">网格 40px，粗线 200px</p>
+        <div class="chart-expand-backdrop" id="chart-expand-backdrop" hidden></div>
         <div class="chart-grid" id="chart-grid"></div>
       </section>
     </main>

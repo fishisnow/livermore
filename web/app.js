@@ -8,6 +8,7 @@ const state = {
   taskConfigDirty: false,
   selectedTask: null,
   chats: [],
+  chatQuery: "",
   switchingChat: false,
 };
 
@@ -68,7 +69,7 @@ function setMoyu(enabled) {
 }
 document.querySelector("#moyu-mode").addEventListener("click", () => setMoyu(document.documentElement.dataset.moyu !== "on"));
 setMoyu(localStorage.getItem("livermore.moyu") === "on");
-document.body.dataset.sidebar = localStorage.getItem("livermore.sidebar") || "expanded";
+document.documentElement.dataset.sidebar = localStorage.getItem("livermore.sidebar") || "expanded";
 document.body.dataset.inspector = localStorage.getItem("livermore.inspector") || "auto";
 const compactWindow = matchMedia("(max-width: 1180px)");
 function syncInspector() {
@@ -83,12 +84,15 @@ function toggleInspector() {
   syncInspector();
 }
 function toggleSidebar() {
-  document.body.dataset.sidebar = document.body.dataset.sidebar === "collapsed" ? "expanded" : "collapsed";
-  localStorage.setItem("livermore.sidebar", document.body.dataset.sidebar);
+  const next = document.documentElement.dataset.sidebar === "collapsed" ? "expanded" : "collapsed";
+  document.documentElement.dataset.sidebar = next;
+  localStorage.setItem("livermore.sidebar", next);
+  closeHistoryMenu();
 }
 compactWindow.addEventListener("change", syncInspector);
 syncInspector();
 document.querySelector("#toggle-sidebar").addEventListener("click", toggleSidebar);
+document.querySelector("#sidebar-collapse").addEventListener("click", toggleSidebar);
 document.querySelector("#toggle-inspector").addEventListener("click", toggleInspector);
 document.querySelector(".conversation").addEventListener("pointerdown", () => {
   if (compactWindow.matches && document.body.dataset.inspector === "open") toggleInspector();
@@ -101,7 +105,9 @@ const views = {
   charts: ["", ""],
   capabilities: ["研究能力", "已安装的 Skills、MCP 与数据连接"],
 };
-const chartState = { fearGreed: null, fearGreedRange: 366, nationalTeam: null, nationalRange: 21 };
+const chartState = { fearGreed: null, fearGreedRange: 366, equityBond: null, equityIndex: "881001.WI", equityPe: "fed", equityRange: 366 * 5, nationalTeam: null, nationalRange: 21, riseFall: null, expandedChart: null };
+const EQUITY_BOND_CHOICES = [["881001.WI", "万得全A"], ["000300.SH", "沪深300"], ["000905.SH", "中证500"], ["000016.SH", "上证50"]];
+const EQUITY_BOND_METHODS = [["fed", "FED"], ["gxl", "股息率"]];
 // Reuse the existing functional panels without modal nesting or duplicate controls.
 for (const panel of [elements.portfolioDialog, elements.capabilityDialog]) {
   panel.classList.add("workspace-panel");
@@ -112,6 +118,7 @@ async function setView(view, { refresh = false } = {}) {
   if (!views[view]) return;
   state.view = view;
   document.body.dataset.view = view;
+  if (view !== "chat") closeHistoryMenu();
   document.querySelector("#view-title").textContent = views[view][0];
   document.querySelector("#view-subtitle").textContent = views[view][1];
   document.querySelectorAll("[data-view-target]").forEach((button) => {
@@ -129,9 +136,19 @@ async function setView(view, { refresh = false } = {}) {
     await loadPortfolio();
   } else if (view === "capabilities") await loadCapabilities(refresh);
   else if (view === "charts") await loadCharts();
+  if (view !== "charts" && chartState.expandedChart) {
+    chartState.expandedChart = null;
+    const backdrop = document.querySelector("#chart-expand-backdrop");
+    if (backdrop) backdrop.hidden = true;
+  }
 }
 document.querySelectorAll("[data-view-target]").forEach((button) => button.addEventListener("click", () => setView(button.dataset.viewTarget)));
+document.querySelector("#chart-expand-backdrop").addEventListener("click", () => {
+  if (chartState.expandedChart) toggleChartExpand(chartState.expandedChart);
+});
 document.querySelector("#chart-grid").addEventListener("click", (event) => {
+  const expand = event.target.closest("[data-chart-expand]");
+  if (expand) { toggleChartExpand(expand.closest(".chart-panel")?.id); return; }
   if (event.target.closest("[data-refresh-charts]")) { loadCharts(); return; }
   const fear = event.target.closest("[data-fear-range]");
   if (fear && chartState.fearGreed) {
@@ -143,18 +160,39 @@ document.querySelector("#chart-grid").addEventListener("click", (event) => {
   if (flow && chartState.nationalTeam) {
     chartState.nationalRange = Number(flow.dataset.flowRange);
     renderNationalTeamPanel();
+    return;
+  }
+  const equityRange = event.target.closest("[data-equity-range]");
+  if (equityRange && chartState.equityBond) {
+    chartState.equityRange = Number(equityRange.dataset.equityRange);
+    renderEquityBondPanel();
+    return;
+  }
+  const equityIndex = event.target.closest("[data-equity-index]");
+  if (equityIndex && equityIndex.dataset.equityIndex !== chartState.equityIndex) {
+    chartState.equityIndex = equityIndex.dataset.equityIndex;
+    loadEquityBondChart();
+    return;
+  }
+  const equityMethod = event.target.closest("[data-equity-pe]");
+  if (equityMethod && equityMethod.dataset.equityPe !== chartState.equityPe) {
+    chartState.equityPe = equityMethod.dataset.equityPe;
+    loadEquityBondChart();
   }
 });
 document.querySelector("#chart-grid").addEventListener("pointerdown", startChartResize);
 document.querySelector("#chart-grid").addEventListener("pointermove", (event) => {
   if (chartResize) return;
-  if (event.target.closest(".fear-chart")) { showFlowCursor(null); moveFearGreedCursor(event); return; }
-  if (event.target.closest(".flow-chart")) { showFearGreedCursor(null); moveFlowCursor(event); return; }
+  if (event.target.closest(".equity-chart")) { showFearGreedCursor(null); showFlowCursor(null); moveEquityCursor(event); return; }
+  if (event.target.closest(".fear-chart")) { showEquityCursor(null); showFlowCursor(null); moveFearGreedCursor(event); return; }
+  if (event.target.closest(".flow-chart")) { showEquityCursor(null); showFearGreedCursor(null); moveFlowCursor(event); return; }
+  showEquityCursor(null);
   showFearGreedCursor(null);
   showFlowCursor(null);
 });
 document.querySelector("#chart-grid").addEventListener("pointerleave", () => {
   if (chartResize) return;
+  showEquityCursor(null);
   showFearGreedCursor(null);
   showFlowCursor(null);
 });
@@ -178,6 +216,9 @@ document.addEventListener("keydown", (event) => {
     const view = ["chat", "portfolio", "tasks", "capabilities"][Number(event.key) - 1];
     if (view) { event.preventDefault(); setView(view); }
   }
+  if (event.key === "Escape" && historyMenuId) { event.preventDefault(); closeHistoryMenu(); return; }
+  if (event.key === "Escape" && !document.querySelector("#appearance-menu").hidden) { event.preventDefault(); document.querySelector("#appearance-menu").hidden = true; document.querySelector("#appearance-button").setAttribute("aria-expanded", "false"); return; }
+  if (event.key === "Escape" && chartState.expandedChart && !document.querySelector("dialog[open]")) { event.preventDefault(); toggleChartExpand(chartState.expandedChart); return; }
   if (event.key === "Escape" && state.view === "chat" && compactWindow.matches && document.body.dataset.inspector === "open" && !elements.dialog.open) toggleInspector();
 });
 
@@ -209,8 +250,63 @@ document.querySelector("#refresh").addEventListener("click", loadDashboard);
 document.querySelector("#refresh-tasks").addEventListener("click", loadDashboard);
 document.querySelector("#new-research-task").addEventListener("click", openNewTaskConfig);
 document.querySelector("#delete-custom-task").addEventListener("click", deleteCustomTask);
-document.querySelector("#refresh-chats").addEventListener("click", () => loadChatHistory());
 document.querySelector("#more-chats").addEventListener("click", () => loadChatHistory(true));
+document.querySelector("#history-search-toggle").addEventListener("click", () => {
+  const box = document.querySelector("#history-search");
+  box.hidden = !box.hidden;
+  document.querySelector("#history-search-toggle").setAttribute("aria-expanded", String(!box.hidden));
+  if (box.hidden) {
+    state.chatQuery = "";
+    document.querySelector("#history-query").value = "";
+    renderChatHistory();
+  } else document.querySelector("#history-query").focus();
+});
+document.querySelector("#history-query").addEventListener("input", (event) => {
+  state.chatQuery = event.target.value;
+  renderChatHistory();
+});
+document.querySelector("#appearance-button").addEventListener("click", (event) => {
+  event.stopPropagation();
+  const menu = document.querySelector("#appearance-menu");
+  menu.hidden = !menu.hidden;
+  document.querySelector("#appearance-button").setAttribute("aria-expanded", String(!menu.hidden));
+  const value = document.querySelector("#appearance").value;
+  menu.querySelectorAll("[data-appearance]").forEach((button) => button.setAttribute("aria-checked", String(button.dataset.appearance === value)));
+});
+document.querySelector("#appearance-menu").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-appearance]");
+  if (!button) return;
+  const select = document.querySelector("#appearance");
+  select.value = button.dataset.appearance;
+  select.dispatchEvent(new Event("change"));
+  document.querySelector("#appearance-menu").hidden = true;
+  document.querySelector("#appearance-button").setAttribute("aria-expanded", "false");
+});
+document.querySelector("#chat-history-list").addEventListener("click", (event) => {
+  const more = event.target.closest("[data-chat-menu]");
+  if (more) {
+    event.stopPropagation();
+    if (historyMenuId === more.dataset.chatMenu) closeHistoryMenu();
+    else openHistoryMenu(more);
+    return;
+  }
+  closeHistoryMenu();
+  const open = event.target.closest("[data-chat-id]");
+  if (open) openChat(open.dataset.chatId);
+});
+document.querySelector("#history-delete").addEventListener("click", () => {
+  const id = historyMenuId;
+  closeHistoryMenu();
+  if (id) deleteChat(id);
+});
+document.querySelector(".chat-history").addEventListener("scroll", closeHistoryMenu, { passive: true });
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("#history-menu") && !event.target.closest("[data-chat-menu]")) closeHistoryMenu();
+  if (!event.target.closest("#appearance-menu") && event.target.id !== "appearance-button" && !event.target.closest("#appearance-button")) {
+    document.querySelector("#appearance-menu").hidden = true;
+    document.querySelector("#appearance-button").setAttribute("aria-expanded", "false");
+  }
+});
 document.querySelector("#notification-permission").addEventListener("click", () => nativeBridge?.postMessage({ type: "notification-permission" }));
 document.querySelector("#close-notification").addEventListener("click", () => elements.notificationDialog.close());
 document.querySelector("#task-config-form").addEventListener("submit", saveTaskConfig);
@@ -272,17 +368,49 @@ function readChartSizes() {
 
 function chartPanelSize(id) {
   const saved = readChartSizes()[id];
+  const fallback = id === "equity-bond-panel" ? { width: 520, height: 360 } : id === "rise-fall-panel" ? { width: 400, height: 380 } : CHART_PANEL_DEFAULT;
   const width = Number(saved?.width);
   const height = Number(saved?.height);
   return {
-    width: Number.isFinite(width) ? width : CHART_PANEL_DEFAULT.width,
-    height: Number.isFinite(height) ? height : CHART_PANEL_DEFAULT.height,
+    width: Number.isFinite(width) ? width : fallback.width,
+    height: Number.isFinite(height) ? height : fallback.height,
   };
 }
 
 function chartPanelBox(id, body) {
   const size = chartPanelSize(id);
-  return `<article class="chart-panel" id="${id}" style="width:${size.width}px;height:${size.height}px">${body}<button class="chart-resize" type="button" data-chart-resize aria-label="拖动调整图表大小"></button></article>`;
+  const expanded = chartState.expandedChart === id;
+  const icon = expanded ? "i-collapse" : "i-expand";
+  const label = expanded ? "还原图表" : "放大图表";
+  return `<article class="chart-panel${expanded ? " expanded" : ""}" id="${id}" style="width:${size.width}px;height:${size.height}px">${body}<button class="icon-button chart-expand" type="button" data-chart-expand aria-pressed="${expanded}" aria-label="${label}"><svg class="icon"><use href="#${icon}"/></svg></button><span class="chart-panel-size">${size.width} × ${size.height}</span><button class="chart-resize" type="button" data-chart-resize aria-label="拖动调整图表大小"></button></article>`;
+}
+
+function syncChartPanelMetric(panel) {
+  const label = panel?.querySelector(".chart-panel-size");
+  if (!label) return;
+  label.textContent = `${panel.offsetWidth} × ${panel.offsetHeight}`;
+}
+
+function toggleChartExpand(id) {
+  if (!id) return;
+  chartState.expandedChart = chartState.expandedChart === id ? null : id;
+  const backdrop = document.querySelector("#chart-expand-backdrop");
+  if (backdrop) backdrop.hidden = chartState.expandedChart === null;
+  if (id === "fear-greed-panel" && chartState.fearGreed?.latest) renderFearGreedPanel();
+  else if (id === "equity-bond-panel" && chartState.equityBond?.latest) renderEquityBondPanel();
+  else if (id === "national-team-panel" && chartState.nationalTeam?.latest) renderNationalTeamPanel();
+  else if (id === "rise-fall-panel" && chartState.riseFall?.success) renderRiseFallPanel();
+  else {
+    const panel = document.getElementById(id);
+    if (!panel) return;
+    const expanded = chartState.expandedChart === id;
+    panel.classList.toggle("expanded", expanded);
+    const button = panel.querySelector("[data-chart-expand]");
+    button?.setAttribute("aria-pressed", String(expanded));
+    button?.setAttribute("aria-label", expanded ? "还原图表" : "放大图表");
+    button?.querySelector("use")?.setAttribute("href", expanded ? "#i-collapse" : "#i-expand");
+    syncChartPanelMetric(panel);
+  }
 }
 
 function saveChartPanelSize(id, width, height) {
@@ -293,7 +421,7 @@ function saveChartPanelSize(id, width, height) {
 
 function startChartResize(event) {
   const handle = event.target.closest("[data-chart-resize]");
-  if (!handle || chartResize) return;
+  if (!handle || chartResize || handle.closest(".chart-panel")?.classList.contains("expanded")) return;
   event.preventDefault();
   const panel = handle.closest(".chart-panel");
   chartResize = {
@@ -318,6 +446,7 @@ function moveChartResize(event) {
   const height = Math.min(760, Math.max(220, chartResize.height + event.clientY - chartResize.startY));
   chartResize.panel.style.width = `${Math.round(width)}px`;
   chartResize.panel.style.height = `${Math.round(height)}px`;
+  syncChartPanelMetric(chartResize.panel);
   cancelAnimationFrame(chartResizeFrame);
   chartResizeFrame = requestAnimationFrame(() => layoutResizedChart(chartResize?.panel));
 }
@@ -337,6 +466,7 @@ function endChartResize() {
 
 function layoutResizedChart(panel) {
   if (panel?.id === "national-team-panel") layoutFlowChart();
+  else if (panel?.id === "equity-bond-panel") layoutEquityBondChart();
   else layoutFearGreedChart();
 }
 
@@ -352,8 +482,8 @@ function mountChartPanel(html) {
 
 async function loadCharts() {
   const grid = document.querySelector("#chart-grid");
-  grid.innerHTML = `${chartPanelBox("fear-greed-panel", `<p class="chart-empty">正在读取韭圈恐贪指数…</p>`)}${chartPanelBox("national-team-panel", `<p class="chart-empty">正在汇总国家队宽基 ETF 净买卖…</p>`)}`;
-  await Promise.all([loadFearGreedChart(), loadNationalTeamChart()]);
+  grid.innerHTML = `${chartPanelBox("rise-fall-panel", `<p class="chart-empty">正在读取大A涨跌家数…</p>`)}${chartPanelBox("fear-greed-panel", `<p class="chart-empty">正在读取韭圈恐贪指数…</p>`)}${chartPanelBox("equity-bond-panel", `<p class="chart-empty">正在读取股债性价比…</p>`)}${chartPanelBox("national-team-panel", `<p class="chart-empty">正在汇总国家队宽基 ETF 净买卖…</p>`)}`;
+  await Promise.all([loadRiseFallChart(), loadFearGreedChart(), loadEquityBondChart(), loadNationalTeamChart()]);
 }
 
 async function loadFearGreedChart() {
@@ -368,6 +498,22 @@ async function loadFearGreedChart() {
   }
 }
 
+async function loadEquityBondChart() {
+  const index = chartState.equityIndex;
+  const method = chartState.equityPe;
+  try {
+    const response = await fetch(`/api/charts/equity-bond?index=${encodeURIComponent(index)}&pe=${encodeURIComponent(method)}`);
+    const data = await response.json();
+    if (index !== chartState.equityIndex || method !== chartState.equityPe) return;
+    if (!response.ok || !data.success) throw new Error(data.message || data.error || `HTTP ${response.status}`);
+    chartState.equityBond = data;
+    renderEquityBondPanel();
+  } catch (error) {
+    if (index !== chartState.equityIndex || method !== chartState.equityPe) return;
+    mountChartPanel(chartPanelBox("equity-bond-panel", `<header class="chart-panel-head"><div><p class="eyebrow">韭圈儿</p><h3>股债性价比</h3></div></header><p class="chart-empty">${escapeHtml(error.message)}</p>`));
+  }
+}
+
 async function loadNationalTeamChart() {
   try {
     const response = await fetch("/api/charts/national-team");
@@ -378,6 +524,57 @@ async function loadNationalTeamChart() {
   } catch (error) {
     mountChartPanel(chartPanelBox("national-team-panel", `<header class="chart-panel-head"><div><p class="eyebrow">宽基 ETF</p><h3>国家队净买卖</h3></div></header><p class="chart-empty">${escapeHtml(error.message)}</p>`));
   }
+}
+
+async function loadRiseFallChart() {
+  try {
+    const response = await fetch("/api/charts/rise-fall");
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(data.message || data.error || `HTTP ${response.status}`);
+    chartState.riseFall = data;
+    renderRiseFallPanel();
+  } catch (error) {
+    mountChartPanel(chartPanelBox("rise-fall-panel", `<header class="chart-panel-head"><div><p class="eyebrow">富途 · 沪深 A 股</p><h3>涨跌家数</h3></div></header><p class="chart-empty">${escapeHtml(error.message)}</p>`));
+  }
+}
+
+function renderRiseFallPanel() {
+  const data = chartState.riseFall;
+  if (!data?.success) return;
+  const count = (value) => Number(value).toLocaleString("zh-CN");
+  mountChartPanel(chartPanelBox("rise-fall-panel", `
+      <header class="chart-panel-head">
+        <div><p class="eyebrow">富途 · 沪深 A 股</p><h3>涨跌家数</h3></div>
+        <div class="chart-panel-tools">
+          <time>${escapeHtml(data.date || "")}</time>
+          <button class="icon-button" type="button" data-refresh-charts aria-label="刷新图表">↻</button>
+        </div>
+      </header>
+      <div class="rise-fall-stage">${riseFallDonut(data)}</div>
+      <p class="rise-fall-legend"><span>上涨 <b>${count(data.rise)}</b></span><span>下跌 <b>${count(data.fall)}</b></span><span>平盘 <b>${count(data.flat)}</b></span><span>涨停 <b>${count(data.limitUp)}</b></span><span>跌停 <b>${count(data.limitDown)}</b></span></p>`));
+}
+
+function riseFallDonut(data) {
+  const rise = Number(data.rise) || 0;
+  const fall = Number(data.fall) || 0;
+  const flat = Number(data.flat) || 0;
+  const total = rise + fall + flat;
+  const radius = 68;
+  const circumference = 2 * Math.PI * radius;
+  const parts = [
+    { value: rise, kind: "rise" },
+    { value: flat, kind: "flat" },
+    { value: fall, kind: "fall" },
+  ].filter((part) => part.value > 0);
+  let cursor = 0;
+  const arcs = parts.map((part) => {
+    const length = total > 0 ? (part.value / total) * circumference : 0;
+    const arc = `<circle class="rise-fall-${part.kind}" cx="100" cy="100" r="${radius}" fill="none" stroke-width="24" stroke-dasharray="${length} ${circumference - length}" stroke-dashoffset="${-cursor}"/>`;
+    cursor += length;
+    return arc;
+  }).join("");
+  const percent = rise + fall > 0 ? `${Math.round(Number(data.heat) * 100)}%` : "—";
+  return `<svg class="rise-fall-chart" viewBox="0 0 200 200" role="img" aria-label="上涨 ${rise} 家，下跌 ${fall} 家，平盘 ${flat} 家"><g transform="rotate(-90 100 100)">${arcs}</g><text class="rise-fall-percent" x="100" y="96" text-anchor="middle">${percent}</text><text class="rise-fall-caption" x="100" y="116" text-anchor="middle">上涨占比</text></svg>`;
 }
 
 function renderFearGreedPanel() {
@@ -403,6 +600,59 @@ function renderFearGreedPanel() {
       <p class="fear-note">${escapeHtml(latest.note)}</p>
       <div class="fear-chart-wrap"></div>`));
   layoutFearGreedChart();
+}
+
+function renderEquityBondPanel() {
+  const data = chartState.equityBond;
+  const latest = data?.latest;
+  if (!latest) return;
+  chartState.equityWindow = fearGreedWindow(data.points, chartState.equityRange);
+  const ranges = [[366, "1 年"], [366 * 5, "5 年"], [0, "10 年"]];
+  const bond = data.bond;
+  const temperature = data.temperature;
+  const facts = [
+    bond ? `<span>十年期国债 <b>${bond.yield.toFixed(2)}%</b></span>` : "",
+    bond?.temperature != null ? `<span>债温 <b>${formatTemperature(bond.temperature)}</b></span>` : "",
+    temperature ? `<span>万得全A股温 <b>${formatTemperature(temperature.value)}</b></span>` : "",
+  ].filter(Boolean).join("");
+  const factTitle = [
+    bond ? `十年期国债取 ${bond.date} 的最新收益率，不随指数、口径和鼠标变化。` : "",
+    bond?.temperature != null ? "债温越高，国债收益率处在历史越低的位置，债券越贵。" : "",
+    temperature ? `股温只统计万得全A，数值越低表示股市越低估。${temperature.summary}` : "",
+  ].filter(Boolean).join("");
+  const note = data.peCategory === "fed"
+    ? "FED 风险溢价是股票盈利收益率减去十年期国债收益率，公式是 1/市盈率 − 国债收益率。数值越高，说明股票相对债券越便宜。"
+    : "溢价越高，股票相对债券越便宜。";
+  const formula = data.formula ? `<span class="equity-info-formula">${escapeHtml(data.formula)}</span>` : "";
+  const title = `<h3 class="equity-title"><span>${escapeHtml(data.peLabel)}</span><span class="equity-info"><button type="button" aria-label="${escapeHtml(data.peLabel)}说明"><svg class="equity-info-mark" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><path d="M12 8h.01"/></svg></button><span class="equity-info-tip"><span class="equity-info-note">${escapeHtml(note)}</span>${formula}</span></span></h3>`;
+  mountChartPanel(chartPanelBox("equity-bond-panel", `
+      <header class="chart-panel-head equity-head">
+        <div class="equity-head-row">
+          <div><p class="eyebrow">韭圈儿 · ${escapeHtml(data.indexName)}</p>${title}</div>
+          <div class="chart-panel-tools">
+            <div class="chart-ranges">${ranges.map(([days, label]) => `<button type="button" data-equity-range="${days}" class="${days === chartState.equityRange ? "selected" : ""}">${label}</button>`).join("")}</div>
+            <button class="icon-button" type="button" data-refresh-charts aria-label="刷新图表">↻</button>
+          </div>
+        </div>
+        ${facts ? `<p class="equity-snapshot" title="${escapeHtml(factTitle)}">${facts}</p>` : ""}
+      </header>
+      <div class="chart-switches">
+        <div class="chart-switch"><span>指数</span><div class="chart-ranges">${EQUITY_BOND_CHOICES.map(([code, label]) => `<button type="button" data-equity-index="${code}" class="${code === chartState.equityIndex ? "selected" : ""}">${label}</button>`).join("")}</div></div>
+        <div class="chart-switch"><span>口径</span><div class="chart-ranges">${EQUITY_BOND_METHODS.map(([method, label]) => `<button type="button" data-equity-pe="${method}" class="${method === chartState.equityPe ? "selected" : ""}">${label}</button>`).join("")}</div></div>
+      </div>
+      <div class="fear-readout equity-readout ${escapeHtml(latest.band)}">
+        <strong>${latest.value.toFixed(2)}%</strong>
+        <span>${escapeHtml(latest.label)}</span>
+        <em>${latest.percentile == null ? "" : `近10年分位 ${latest.percentile.toFixed(1)}%`}</em>
+        <time>${escapeHtml(latest.date)}</time>
+      </div>
+      <p class="equity-note">${escapeHtml(latest.note)}</p>
+      <div class="fear-chart-wrap"></div>`));
+  layoutEquityBondChart();
+}
+
+function formatTemperature(value) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
 function renderNationalTeamPanel() {
@@ -520,6 +770,7 @@ function layoutFlowChart() {
   const points = chartState.flowWindow;
   if (!wrap || !points?.length) return;
   wrap.innerHTML = flowChart(points, Math.max(1, Math.round(wrap.clientWidth)), Math.max(1, Math.round(wrap.clientHeight)));
+  syncChartPanelMetric(wrap.closest(".chart-panel"));
 }
 
 function flowChart(points, width, height) {
@@ -653,6 +904,7 @@ function layoutFearGreedChart() {
   const width = Math.max(1, Math.round(wrap.clientWidth));
   const height = Math.max(1, Math.round(wrap.clientHeight));
   wrap.innerHTML = fearGreedChart(points, width, height);
+  syncChartPanelMetric(wrap.closest(".chart-panel"));
 }
 
 function fearGreedChart(points, width, height) {
@@ -683,10 +935,147 @@ function fearGreedChart(points, width, height) {
     <div class="fear-tooltip" hidden></div>`;
 }
 
+function moveEquityCursor(event) {
+  const svg = event.target.closest(".equity-chart");
+  const points = chartState.equityWindow;
+  if (!svg || !points?.length || chartResize) { showEquityCursor(null); return; }
+  const view = svg.viewBox.baseVal;
+  if (!view.width || !view.height) return;
+  const metrics = equityChartMetrics(points, view.width, view.height);
+  const rect = svg.getBoundingClientRect();
+  const viewX = (event.clientX - rect.left) / rect.width * metrics.width;
+  if (viewX < metrics.left || viewX > metrics.left + metrics.plotW) { showEquityCursor(null); return; }
+  const index = points.length === 1 ? 0 : Math.round((viewX - metrics.left) / metrics.plotW * (points.length - 1));
+  showEquityCursor(points[index], index, metrics);
+}
+
+function showEquityCursor(point, index, metrics) {
+  const panel = document.querySelector("#equity-bond-panel");
+  const readout = panel?.querySelector(".equity-readout");
+  const note = panel?.querySelector(".equity-note");
+  const crosshair = panel?.querySelector(".fear-crosshair");
+  const hover = panel?.querySelector(".fear-hover");
+  const tooltip = panel?.querySelector(".fear-tooltip");
+  const latest = chartState.equityBond?.latest;
+  const bands = chartState.equityBond?.bands || [];
+  const shown = point || latest;
+  if (!readout || !shown) return;
+  const band = equityBandAt(bands, shown.value);
+  const bandId = point ? (band?.id || "outside") : latest.band;
+  const label = point ? (band?.label || "区间外") : latest.label;
+  readout.className = `fear-readout equity-readout ${bandId}`;
+  readout.querySelector("strong").textContent = `${shown.value.toFixed(2)}%`;
+  readout.querySelector("span").textContent = label;
+  readout.querySelector("em").textContent = point
+    ? (point.mean == null ? "" : `滚动均值 ${point.mean.toFixed(2)}%`)
+    : (latest.percentile == null ? "" : `近10年分位 ${latest.percentile.toFixed(1)}%`);
+  readout.querySelector("time").textContent = shown.date;
+  if (note) note.textContent = point ? (band?.note || "当前风险溢价落在平台温度带之外。") : latest.note;
+  if (!crosshair || !hover || !tooltip) return;
+  if (!point || !metrics) {
+    crosshair.setAttribute("visibility", "hidden");
+    hover.setAttribute("visibility", "hidden");
+    tooltip.hidden = true;
+    return;
+  }
+  const x = metrics.x(index);
+  const y = metrics.y(point.value);
+  crosshair.setAttribute("x1", x.toFixed(1));
+  crosshair.setAttribute("x2", x.toFixed(1));
+  crosshair.setAttribute("y1", metrics.top);
+  crosshair.setAttribute("y2", metrics.top + metrics.plotH);
+  crosshair.removeAttribute("visibility");
+  hover.setAttribute("cx", x.toFixed(1));
+  hover.setAttribute("cy", y.toFixed(1));
+  hover.removeAttribute("visibility");
+  tooltip.hidden = false;
+  tooltip.textContent = `${point.date}  ${point.value.toFixed(2)}%  ${label}`;
+  const wrap = tooltip.parentElement.getBoundingClientRect();
+  const svg = tooltip.parentElement.querySelector(".equity-chart").getBoundingClientRect();
+  const left = svg.left - wrap.left + (x / metrics.width) * svg.width + 12;
+  tooltip.style.left = `${Math.min(left, wrap.width - tooltip.offsetWidth - 8)}px`;
+  tooltip.style.top = `${Math.max(8, svg.top - wrap.top + (y / metrics.height) * svg.height - 28)}px`;
+}
+
+function equityBandAt(bands, value) {
+  return bands.find((band) => value >= band.low && value <= band.high) || null;
+}
+
+function equityChartMetrics(points, width, height) {
+  const values = points.flatMap((point) => point.mean == null ? [point.value] : [point.value, point.mean]);
+  const frame = { width, height, left: 36, right: 8, top: 8, bottom: 16 };
+  const plotW = Math.max(1, frame.width - frame.left - frame.right);
+  const plotH = Math.max(1, frame.height - frame.top - frame.bottom);
+  const span = Math.max(...values) - Math.min(...values);
+  const pad = Math.max(span * 0.08, 0.05);
+  const min = Math.min(...values) - pad;
+  const max = Math.max(...values) + pad;
+  return {
+    ...frame,
+    plotW,
+    plotH,
+    min,
+    max,
+    y: (value) => frame.top + (max - value) / (max - min) * plotH,
+    x: (index) => frame.left + (points.length <= 1 ? plotW / 2 : index / (points.length - 1) * plotW),
+  };
+}
+
+function layoutEquityBondChart() {
+  const wrap = document.querySelector("#equity-bond-panel .fear-chart-wrap");
+  const points = chartState.equityWindow;
+  if (!wrap || !points?.length) return;
+  wrap.innerHTML = equityChart(points, chartState.equityBond?.bands || [], Math.max(1, Math.round(wrap.clientWidth)), Math.max(1, Math.round(wrap.clientHeight)));
+  syncChartPanelMetric(wrap.closest(".chart-panel"));
+}
+
+function equityChart(points, bands, width, height) {
+  const metrics = equityChartMetrics(points, width, height);
+  const { left, right, top, plotW, plotH, min, max, x, y } = metrics;
+  const ticks = flowTicks(min, max);
+  const line = points.map((point, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${y(point.value).toFixed(1)}`).join("");
+  const mean = equityMeanPath(points, x, y);
+  const last = points.at(-1);
+  const middle = points[Math.floor((points.length - 1) / 2)];
+  const axisDate = (date) => date.slice(2);
+  const middleLabel = width >= 420 ? `<text class="axis" x="${x(Math.floor((points.length - 1) / 2)).toFixed(1)}" y="${height - 3}" text-anchor="middle">${escapeHtml(axisDate(middle.date))}</text>` : "";
+  const zones = bands.map((band) => {
+    const topY = Math.min(y(band.high), y(band.low));
+    const zoneH = Math.abs(y(band.low) - y(band.high));
+    return `<rect class="zone ${band.id}" x="${left}" y="${topY.toFixed(1)}" width="${plotW}" height="${zoneH.toFixed(1)}"></rect>`;
+  }).join("");
+  return `<svg class="equity-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="股债性价比，横轴为时间，纵轴为风险溢价百分比">
+      ${zones}
+      ${ticks.map((tick) => `<line class="gridline" x1="${left}" x2="${left + plotW}" y1="${y(tick).toFixed(1)}" y2="${y(tick).toFixed(1)}"></line><text class="axis" x="${left - 6}" y="${y(tick).toFixed(1)}" text-anchor="end" dominant-baseline="middle">${tick.toFixed(Math.abs(tick) >= 10 ? 0 : 1)}</text>`).join("")}
+      ${mean ? `<path class="equity-mean" d="${mean}"></path>` : ""}
+      <path class="equity-line" d="${line}"></path>
+      <line class="fear-crosshair" visibility="hidden" x1="${left}" x2="${left}" y1="${top}" y2="${top + plotH}"></line>
+      <circle class="fear-hover" visibility="hidden" r="3"></circle>
+      <circle class="equity-dot" cx="${x(points.length - 1).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="2.5"></circle>
+      <text class="axis" x="${left}" y="${height - 3}">${escapeHtml(axisDate(points[0].date))}</text>
+      ${middleLabel}
+      <text class="axis" x="${width - right}" y="${height - 3}" text-anchor="end">${escapeHtml(axisDate(last.date))}</text>
+      <rect class="fear-hit" x="${left}" y="${top}" width="${plotW}" height="${plotH}"></rect>
+    </svg>
+    <div class="fear-tooltip" hidden></div>`;
+}
+
+function equityMeanPath(points, x, y) {
+  let path = "";
+  let drawing = false;
+  points.forEach((point, index) => {
+    if (point.mean == null) { drawing = false; return; }
+    path += `${drawing ? "L" : "M"}${x(index).toFixed(1)},${y(point.mean).toFixed(1)}`;
+    drawing = true;
+  });
+  return path;
+}
+
 function renderDashboard(data) {
   if (state.selectedTask && !data.tasks.some((task) => task.task === state.selectedTask)) state.selectedTask = null;
   const selectedTask = data.tasks.find((task) => task.task === state.selectedTask) ?? null;
   document.querySelector("#nav-task-count").textContent = String(data.tasks.length);
+  document.querySelector("[data-view-target='tasks']").title = `定时任务 · ${data.tasks.length}`;
   document.querySelector("#recent-runs-label").textContent = selectedTask ? `最近运行 · ${selectedTask.title}` : "最近运行";
   document.querySelector("#view-all-runs").hidden = !selectedTask;
   elements.traceLink.href = data.agent.phoenixUrl;
@@ -908,6 +1297,38 @@ async function saveTaskConfig(event) {
   finally { save.disabled = false; }
 }
 
+let historyMenuId = "";
+
+function closeHistoryMenu() {
+  historyMenuId = "";
+  const menu = document.querySelector("#history-menu");
+  if (menu) menu.hidden = true;
+  document.querySelectorAll(".history-row.menu-open").forEach((row) => row.classList.remove("menu-open"));
+}
+
+function openHistoryMenu(button) {
+  closeHistoryMenu();
+  historyMenuId = button.dataset.chatMenu || "";
+  const menu = document.querySelector("#history-menu");
+  const row = button.closest(".history-row");
+  row?.classList.add("menu-open");
+  const rect = button.getBoundingClientRect();
+  menu.hidden = false;
+  const menuRect = menu.getBoundingClientRect();
+  menu.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - menuRect.height - 8)}px`;
+  menu.style.left = `${Math.max(8, Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 8))}px`;
+}
+
+function renderChatHistory() {
+  const query = state.chatQuery.trim().toLowerCase();
+  const chats = state.chats.filter((item) => !query || item.title.toLowerCase().includes(query));
+  closeHistoryMenu();
+  document.querySelector("#chat-history-list").innerHTML = chats.length ? chats.map((item) => {
+    const status = item.status === "running" ? "生成中" : item.status === "error" || item.status === "interrupted" ? "未完成" : "";
+    return `<div class="history-row ${item.id === state.sessionId ? "selected" : ""}"><button class="history-open" type="button" data-chat-id="${escapeHtml(item.id)}" title="${escapeHtml(`${item.title} · ${relativeTime(item.updatedAt)}${status ? ` · ${status}` : ""}`)}"><span>${escapeHtml(item.title)}</span></button><button class="history-more" type="button" data-chat-menu="${escapeHtml(item.id)}" aria-label="会话操作：${escapeHtml(item.title)}" aria-haspopup="menu"><svg class="icon"><use href="#i-more"/></svg></button></div>`;
+  }).join("") : `<p class="history-empty">${query ? "没有匹配的对话" : "对话会自动保存在这里。"}</p>`;
+}
+
 async function loadChatHistory(more = false) {
   try {
     const response = await fetch(`/api/chat/sessions?offset=${more ? state.chats.length : 0}`);
@@ -915,9 +1336,7 @@ async function loadChatHistory(more = false) {
     const data = await response.json();
     state.chats = more ? [...state.chats, ...data.sessions.filter((item) => !state.chats.some((existing) => existing.id === item.id))] : data.sessions;
     document.querySelector("#more-chats").hidden = data.sessions.length < 100;
-    document.querySelector("#chat-history-list").innerHTML = state.chats.length ? state.chats.map((item) => `<div class="history-row ${item.id === state.sessionId ? "selected" : ""}"><button class="history-open" type="button" data-chat-id="${escapeHtml(item.id)}" title="${escapeHtml(item.title)}"><span>${escapeHtml(item.title)}</span><small>${relativeTime(item.updatedAt)}${item.status === "running" ? " · 生成中" : item.status === "error" || item.status === "interrupted" ? " · 未完成" : ""}</small></button><button class="history-delete" data-delete-chat="${escapeHtml(item.id)}" aria-label="删除会话：${escapeHtml(item.title)}" type="button">×</button></div>`).join("") : '<p class="history-empty">开始对话后，会自动保存在这里。</p>';
-    document.querySelectorAll("[data-chat-id]").forEach((button) => button.addEventListener("click", () => openChat(button.dataset.chatId)));
-    document.querySelectorAll("[data-delete-chat]").forEach((button) => button.addEventListener("click", () => deleteChat(button.dataset.deleteChat)));
+    renderChatHistory();
   } catch (error) { console.error("历史会话读取失败", error); }
 }
 
@@ -938,7 +1357,7 @@ async function openChat(id) {
     const data = await response.json();
     state.sessionId = data.id; localStorage.setItem("livermore.sessionId", data.id);
     elements.messages.replaceChildren(elements.welcome); elements.welcome.hidden = data.messages.length > 0;
-    for (const message of data.messages) appendMessage(message.role, message.text + (message.error ? `\n\n对话没有完成：${message.error}` : ""));
+    for (const message of data.messages) appendMessage(message.role, message.text + (message.error ? `\n\n对话没有完成：${message.error}` : ""), { source: message.text });
     if (data.error && !data.messages.some((message) => message.error === data.error)) appendMessage("assistant", `对话没有完成：${data.error}`);
     document.querySelector("#chat-session-title").textContent = data.title;
     await setView("chat"); await loadChatHistory(); scrollMessages();
@@ -976,6 +1395,7 @@ async function loadPortfolio() {
 
 function renderPortfolio(positions) {
   document.querySelector("#nav-position-count").textContent = String(positions.length);
+  document.querySelector("[data-view-target='portfolio']").title = `我的持仓 · ${positions.length}`;
   const warningCount = positions.filter((item) => item.severity === "warning").length;
   const criticalCount = positions.filter((item) => item.severity === "critical").length;
   document.querySelector("#portfolio-count").textContent = String(positions.length);
@@ -1397,15 +1817,28 @@ function capabilityStatus(status) {
   })[status] || status;
 }
 
-async function sendMessage(rawMessage) {
+async function sendMessage(rawMessage, options = {}) {
   const message = rawMessage?.trim();
   if (!message || state.sending || state.switchingChat) return;
+  const replaceFrom = Number.isInteger(options.replaceFrom) ? options.replaceFrom : undefined;
+  cancelMessageEdit();
+  if (replaceFrom !== undefined) {
+    const target = elements.messages.querySelector(`.message.user[data-user-index="${replaceFrom}"]`);
+    if (!target) { showToast("找不到要修改的输入"); return; }
+    let node = target;
+    while (node) {
+      const next = node.nextElementSibling;
+      if (node !== elements.welcome) node.remove();
+      node = next;
+    }
+  }
   state.sending = true;
+  document.body.dataset.sending = "on";
   elements.send.disabled = true;
   elements.prompt.value = "";
   autoSize();
   elements.welcome.hidden = true;
-  appendMessage("user", message);
+  appendMessage("user", message, { source: message, userIndex: replaceFrom });
   const assistantBody = appendMessage("assistant", "");
   let accumulated = "";
 
@@ -1419,7 +1852,7 @@ async function sendMessage(rawMessage) {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: state.sessionId || undefined, message }),
+      body: JSON.stringify({ sessionId: state.sessionId || undefined, message, ...(replaceFrom === undefined ? {} : { replaceFrom }) }),
     });
     if (!response.ok || !response.body) {
       const payload = await response.json().catch(() => ({}));
@@ -1442,7 +1875,7 @@ async function sendMessage(rawMessage) {
           loadChatHistory();
         } else if (event.type === "delta") {
           accumulated += event.data.text;
-          assistantBody.innerHTML = renderMarkdown(accumulated);
+          assistantBody.innerHTML = renderReportMarkdown(accumulated);
           scrollMessages();
         } else if (event.type === "tool_start") {
           elements.toolActivity.hidden = false;
@@ -1460,6 +1893,7 @@ async function sendMessage(rawMessage) {
     assistantBody.innerHTML = `<p>对话没有完成：${escapeHtml(error.message)}</p>`;
   } finally {
     state.sending = false;
+    delete document.body.dataset.sending;
     elements.send.disabled = false;
     elements.toolActivity.hidden = true;
     if (state.sessionId) await openChat(state.sessionId);
@@ -1469,7 +1903,43 @@ async function sendMessage(rawMessage) {
   }
 }
 
-function appendMessage(role, text) {
+let editingMessage = null;
+
+function cancelMessageEdit() {
+  if (!editingMessage) return;
+  const article = editingMessage;
+  editingMessage = null;
+  article.classList.remove("editing");
+  const body = article.querySelector(".message-body");
+  body.innerHTML = renderReportMarkdown(article._sourceText || "");
+  const edit = article.querySelector(".message-edit");
+  if (edit) edit.hidden = false;
+}
+
+function startEditMessage(article) {
+  if (state.sending || state.switchingChat) { showToast("请等待当前对话操作完成后再修改"); return; }
+  if (editingMessage === article) return;
+  cancelMessageEdit();
+  editingMessage = article;
+  article.classList.add("editing");
+  const body = article.querySelector(".message-body");
+  body.innerHTML = "";
+  const textarea = document.createElement("textarea");
+  textarea.className = "message-editor";
+  textarea.value = article._sourceText || "";
+  textarea.maxLength = 20000;
+  textarea.setAttribute("aria-label", "修改输入");
+  const actions = document.createElement("div");
+  actions.className = "message-editor-actions";
+  actions.innerHTML = `<button class="message-edit-cancel" type="button">取消</button><button class="message-edit-submit" type="button">重新发起</button>`;
+  body.append(textarea, actions);
+  const edit = article.querySelector(".message-edit");
+  if (edit) edit.hidden = true;
+  textarea.focus();
+  textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+}
+
+function appendMessage(role, text, options = {}) {
   const article = document.createElement("article");
   article.className = `message ${role}`;
   const label = document.createElement("div");
@@ -1477,12 +1947,38 @@ function appendMessage(role, text) {
   label.textContent = role === "user" ? "You" : "Livermore";
   const body = document.createElement("div");
   body.className = "message-body";
-  body.innerHTML = renderMarkdown(text);
+  body.innerHTML = renderReportMarkdown(text);
   article.append(label, body);
+  if (role === "user") {
+    const userIndex = Number.isInteger(options.userIndex) ? options.userIndex : elements.messages.querySelectorAll(".message.user").length;
+    article.dataset.userIndex = String(userIndex);
+    article._sourceText = options.source ?? text;
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
+    actions.innerHTML = `<button class="message-edit" type="button" aria-label="修改这条输入"><svg class="icon"><use href="#i-compose"/></svg></button>`;
+    article.append(actions);
+  }
   elements.messages.append(article);
   scrollMessages();
   return body;
 }
+
+elements.messages.addEventListener("click", (event) => {
+  const article = event.target.closest(".message.user");
+  if (!article) return;
+  if (event.target.closest(".message-edit")) startEditMessage(article);
+  else if (event.target.closest(".message-edit-cancel")) cancelMessageEdit();
+  else if (event.target.closest(".message-edit-submit")) sendMessage(article.querySelector(".message-editor")?.value, { replaceFrom: Number(article.dataset.userIndex) });
+});
+elements.messages.addEventListener("keydown", (event) => {
+  if (!event.target.classList?.contains("message-editor")) return;
+  if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelMessageEdit(); }
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    const article = event.target.closest(".message.user");
+    sendMessage(event.target.value, { replaceFrom: Number(article.dataset.userIndex) });
+  }
+});
 
 async function runTask(task, button) {
   button.disabled = true;
@@ -1557,27 +2053,6 @@ function parseSse(block) {
   if (!data.length) return null;
   try { return { type, data: JSON.parse(data.join("\n")) }; }
   catch { return null; }
-}
-
-function renderMarkdown(value) {
-  if (!value) return "";
-  const lines = String(value).split("\n");
-  let html = "";
-  let listOpen = false;
-  for (const line of lines) {
-    if (/^[-*] /.test(line)) {
-      if (!listOpen) { html += "<ul>"; listOpen = true; }
-      html += `<li>${inlineMarkdown(line.slice(2))}</li>`;
-      continue;
-    }
-    if (listOpen) { html += "</ul>"; listOpen = false; }
-    if (line.startsWith("### ")) html += `<h3>${inlineMarkdown(line.slice(4))}</h3>`;
-    else if (line.startsWith("## ")) html += `<h2>${inlineMarkdown(line.slice(3))}</h2>`;
-    else if (line.startsWith("# ")) html += `<h2>${inlineMarkdown(line.slice(2))}</h2>`;
-    else if (line.trim()) html += `<p>${inlineMarkdown(line)}</p>`;
-  }
-  if (listOpen) html += "</ul>";
-  return html;
 }
 
 function renderReportMarkdown(markdown) {

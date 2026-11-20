@@ -16,8 +16,10 @@ import { createRuntimeTools, listSkillDescriptors } from "./tools/runtime-tools.
 import { getTaskSettings, isTaskName, saveTaskSettings, scheduleDescription, taskNames, taskTitles, taskModes, defaultTaskPrompt, TaskSettingsError } from "./tasks/task-settings.js";
 import { notificationPreview } from "./notifications/macos-channel.js";
 import { createCustomResearchTask, defaultTaskSettings, isBuiltinTaskName, listTaskNames, modesForTask, titleForTask } from "./tasks/task-settings.js";
-import { ChatSessionError, PersistentChatSessions, visibleChatMessages } from "./chat/persistent-sessions.js";
+import { ChatSessionError, PersistentChatSessions, transcriptBeforeUserTurn, visibleChatMessages } from "./chat/persistent-sessions.js";
+import { queryJiucaishuoEquityBond } from "./market/jiucaishuo-equity-bond.js";
 import { queryJiucaishuoFearGreed } from "./market/jiucaishuo-fear-greed.js";
+import { queryAshareRiseFall } from "./market/futu-rise-fall.js";
 import { queryNationalTeamFlow } from "./market/national-team-etf-flow.js";
 import { entryAtrStop } from "./portfolio/entry-stop.js";
 import { refreshMcpServerTools } from "./mcp/agent-tools.js";
@@ -156,8 +158,17 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     sendJson(response, 405, { error: "Method not allowed." });
   } else if (request.method === "GET" && url.pathname === "/api/charts/fear-greed") {
     sendJson(response, 200, await queryJiucaishuoFearGreed());
+  } else if (request.method === "GET" && url.pathname === "/api/charts/equity-bond") {
+    const indexCode = url.searchParams.get("index")?.trim() || "";
+    const peCategory = url.searchParams.get("pe")?.trim() || "";
+    sendJson(response, 200, await queryJiucaishuoEquityBond({
+      ...(indexCode ? { indexCode } : {}),
+      ...(peCategory ? { peCategory } : {}),
+    }));
   } else if (request.method === "GET" && url.pathname === "/api/charts/national-team") {
     sendJson(response, 200, await queryNationalTeamFlow());
+  } else if (request.method === "GET" && url.pathname === "/api/charts/rise-fall") {
+    sendJson(response, 200, await queryAshareRiseFall({ config }));
   } else if (request.method === "GET" && url.pathname === "/api/portfolio") {
     sendJson(response, 200, { positions: database.listPositions() });
   } else if (request.method === "POST" && url.pathname === "/api/portfolio") {
@@ -209,18 +220,27 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 }
 
 async function chat(request: IncomingMessage, response: ServerResponse): Promise<void> {
-  const body = await readJsonBody(request) as { sessionId?: string; message?: string };
+  const body = await readJsonBody(request) as { sessionId?: string; message?: string; replaceFrom?: unknown };
   const message = body.message?.trim();
   if (!message || message.length > 20_000) return sendJson(response, 400, { error: "Message must contain 1–20,000 characters." });
   if (body.sessionId && !validSessionId(body.sessionId)) return sendJson(response, 400, { error: "Invalid session ID." });
+  let replaceFrom: number | undefined;
+  if (body.replaceFrom !== undefined) {
+    if (typeof body.replaceFrom !== "number" || !Number.isInteger(body.replaceFrom) || body.replaceFrom < 0) return sendJson(response, 400, { error: "要修改的输入不存在。" });
+    replaceFrom = body.replaceFrom;
+  }
   const sessionId = body.sessionId ?? database.createChat().id;
-  let agent: Agent;
-  try { agent = await sessions.acquire(sessionId); }
-  catch (error) {
+  let agent: Agent | undefined;
+  try {
+    agent = await sessions.acquire(sessionId);
+    if (replaceFrom !== undefined) agent.state.messages = transcriptBeforeUserTurn(agent.state.messages, replaceFrom) as Agent["state"]["messages"];
+  } catch (error) {
+    if (agent) sessions.release(sessionId);
     const stored = database.getChat(sessionId);
     if (stored && !(error instanceof ChatSessionError)) database.saveChat(sessionId, [...stored.messages, { role: "user", content: message, timestamp: Date.now() }], "error", error instanceof Error ? error.message : String(error));
     throw error;
   }
+  if (!agent) throw new ChatSessionError("会话没有准备好。", 500);
   database.saveChat(sessionId, agent.state.messages, "running");
   let failure: string | null = null;
 

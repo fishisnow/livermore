@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { access, rm } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,6 +42,12 @@ console.log("正在安装到 /Applications/Livermore.app…");
 await rm(installedApp, { recursive: true, force: true });
 run("/usr/bin/ditto", [builtApp, installedApp]);
 run("/usr/bin/codesign", ["--verify", "--deep", "--strict", installedApp]);
+
+// The window keeps localhost pages for a few minutes. Remove only that HTTP cache after the app
+// has quit, so the new build is what opens. Daily browsing still uses the normal cache.
+const pageCache = path.join(homedir(), "Library", "Caches", "com.livermore.desktop", "WebKit", "NetworkCache");
+console.log("正在清除页面缓存…");
+await rm(pageCache, { recursive: true, force: true });
 
 if (!skipOpen) {
   console.log("正在打开 Livermore…");

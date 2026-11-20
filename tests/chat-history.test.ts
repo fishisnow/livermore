@@ -4,7 +4,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import type { Agent } from "@earendil-works/pi-agent-core";
 import { InvestmentDatabase } from "../src/storage/database.js";
-import { PersistentChatSessions, visibleChatMessages } from "../src/chat/persistent-sessions.js";
+import { PersistentChatSessions, transcriptBeforeUserTurn, visibleChatMessages } from "../src/chat/persistent-sessions.js";
 
 describe("durable chat history", () => {
   it("keeps previous conversations and tool context across database and agent restarts", async () => {
@@ -40,5 +40,17 @@ describe("durable chat history", () => {
     db.saveChat(record.id, [{ role: "user", content: "未完成的问题" }], "running"); db.recoverInterruptedChats();
     expect(db.getChat(record.id)).toMatchObject({ status: "interrupted", title: "未完成的问题" });
     db.close();
+  });
+  it("drops the chosen user input and everything after it", () => {
+    const transcript = [
+      { role: "user", content: "第一问" },
+      { role: "assistant", content: [{ type: "text", text: "第一答" }] },
+      { role: "toolResult", toolCallId: "1", toolName: "read", content: [{ type: "text", text: "上下文" }] },
+      { role: "user", content: "第二问" },
+      { role: "assistant", content: "第二答" },
+    ];
+    expect(transcriptBeforeUserTurn(transcript, 1)).toEqual(transcript.slice(0, 3));
+    expect(transcriptBeforeUserTurn(transcript, 0)).toEqual([]);
+    expect(() => transcriptBeforeUserTurn(transcript, 2)).toThrow("要修改的输入不存在。");
   });
 });

@@ -43,12 +43,32 @@ export class PersistentChatSessions {
   }
 }
 
+function chatMessageText(value: Record<string, unknown>): string {
+  if (typeof value.content === "string") return value.content;
+  if (!Array.isArray(value.content)) return "";
+  return value.content.filter((part) => part?.type === "text").map((part) => part.text).join("");
+}
+
 export function visibleChatMessages(messages: readonly unknown[]) {
   return messages.flatMap((message) => {
     if (!message || typeof message !== "object") return [];
     const value = message as Record<string, unknown>;
     if (value.role !== "user" && value.role !== "assistant") return [];
-    const text = typeof value.content === "string" ? value.content : Array.isArray(value.content) ? value.content.filter((part) => part?.type === "text").map((part) => part.text).join("") : "";
+    const text = chatMessageText(value);
     return text || value.errorMessage ? [{ role: value.role, text, error: typeof value.errorMessage === "string" ? value.errorMessage : null }] : [];
   });
+}
+
+export function transcriptBeforeUserTurn(messages: readonly unknown[], userIndex: number): unknown[] {
+  if (!Number.isInteger(userIndex) || userIndex < 0) throw new ChatSessionError("要修改的输入不存在。", 400);
+  let seen = 0;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object") continue;
+    const value = message as Record<string, unknown>;
+    if (value.role !== "user" || (!chatMessageText(value) && !value.errorMessage)) continue;
+    if (seen === userIndex) return messages.slice(0, index);
+    seen += 1;
+  }
+  throw new ChatSessionError("要修改的输入不存在。", 400);
 }
