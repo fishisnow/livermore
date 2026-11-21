@@ -319,6 +319,45 @@ export function extractIndicatorValue(
   return Number.isFinite(parsed) ? round(parsed) : undefined;
 }
 
+export interface FutuHistoryBar {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+const HISTORY_KTYPES = new Set(["1d", "1w", "1M", "1Q", "1Y"]);
+
+export async function queryFutuHistoryKline(
+  config: AppConfig,
+  futuCode: string,
+  ktype: string,
+  start: string,
+  end: string,
+): Promise<FutuHistoryBar[]> {
+  if (!HISTORY_KTYPES.has(ktype)) throw new Error(`不支持的 K 线周期：${ktype}`);
+  const output = await runFutuScript(
+    config,
+    futuKlineScriptPath,
+    [futuCode, "--ktype", ktype, "--start", start, "--end", end, "--num", "1000", "--rehab", "forward", "--json"],
+    60_000,
+  );
+  const parsed = parseJson<{ data?: FutuKlineRow[]; error?: string }>(output, `Futu K-line ${futuCode}`);
+  if (parsed.error) throw new Error(parsed.error);
+  return (parsed.data ?? []).flatMap((row) => {
+    const date = text(row.time)?.slice(0, 10);
+    const open = positiveNumber(row.open);
+    const high = positiveNumber(row.high);
+    const low = positiveNumber(row.low);
+    const close = positiveNumber(row.close);
+    if (!date || open === undefined || high === undefined || low === undefined || close === undefined) return [];
+    const volume = Number(row.volume);
+    return [{ date, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0 }];
+  });
+}
+
 async function readDailyKlines(config: AppConfig, code: string): Promise<FutuKlineRow[]> {
   const output = await runFutuScript(
     config,

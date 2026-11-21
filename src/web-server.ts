@@ -8,7 +8,8 @@ import type { Agent } from "@earendil-works/pi-agent-core";
 import { createLivermoreChatAgent } from "./chat/livermore-chat-agent.js";
 import { loadConfig } from "./config.js";
 import { observeAgent, Telemetry } from "./observability/telemetry.js";
-import { databasePath, nodeEntrypointArguments, projectRoot, reportsDirectory, webDirectory } from "./project-paths.js";
+import { databasePath, nodeEntrypointArguments, projectRoot, reportsDirectory, resourceRoot, webDirectory } from "./project-paths.js";
+import { isTrendKtype, loadHoldingTrend, loadHoldingTrends } from "./market/portfolio-trend.js";
 import { InvestmentDatabase } from "./storage/database.js";
 import type { PortfolioPositionInput, TaskName } from "./storage/database.js";
 import { createReportTool } from "./tools/report-tool.js";
@@ -175,6 +176,19 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     sendJson(response, 200, await queryNationalTeamFlow());
   } else if (request.method === "GET" && url.pathname === "/api/charts/rise-fall") {
     sendJson(response, 200, await queryAshareRiseFall({ config }));
+  } else if (request.method === "GET" && url.pathname === "/api/portfolio/trends") {
+    const trends = await loadHoldingTrends(config, database.listPositions().map((position) => position.symbol));
+    sendJson(response, 200, { trends });
+  } else if (request.method === "GET" && url.pathname === "/api/portfolio/trend") {
+    const symbol = url.searchParams.get("symbol")?.trim() ?? "";
+    const ktype = url.searchParams.get("ktype")?.trim() || "1d";
+    if (!symbol) return sendJson(response, 400, { error: "缺少股票代码。" });
+    if (!isTrendKtype(ktype)) return sendJson(response, 400, { error: "不支持的 K 线周期。" });
+    try {
+      sendJson(response, 200, await loadHoldingTrend(config, symbol, ktype));
+    } catch (error) {
+      sendJson(response, 502, { error: error instanceof Error ? error.message : String(error) });
+    }
   } else if (request.method === "GET" && url.pathname === "/api/portfolio") {
     sendJson(response, 200, { positions: database.listPositions(), atrStopMultiplier: database.getAtrStopMultiplier() });
   } else if (request.method === "PUT" && url.pathname === "/api/portfolio/settings") {
@@ -225,6 +239,8 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     else sendJson(response, 405, { error: "Method not allowed." });
   } else if (request.method === "POST" && url.pathname === "/api/chat") {
     await chat(request, response);
+  } else if (request.method === "GET" && url.pathname === "/vendor/echarts.min.js") {
+    await serveEcharts(response);
   } else if (request.method === "GET") {
     await serveStatic(url.pathname, response);
   } else {
@@ -405,6 +421,17 @@ function parseOptionalAlertPrice(value: unknown, label: string): number | null {
     throw new Error(`${label}必须是大于 0 的有效数字。`);
   }
   return parsed;
+}
+
+async function serveEcharts(response: ServerResponse): Promise<void> {
+  const filename = path.join(resourceRoot, "node_modules", "echarts", "dist", "echarts.min.js");
+  try {
+    await stat(filename);
+  } catch {
+    return sendJson(response, 404, { error: "图表组件不存在。" });
+  }
+  response.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "public, max-age=300" });
+  createReadStream(filename).pipe(response);
 }
 
 async function serveStatic(pathname: string, response: ServerResponse): Promise<void> {

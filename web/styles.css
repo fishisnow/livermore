@@ -1607,6 +1607,9 @@ dialog::backdrop {
   border-radius:9px;
   background:var(--surface)
 }
+html[data-moyu="on"] .portfolio-table-wrap {
+  filter:grayscale(1)
+}
 .portfolio-table {
   width:100%;
   table-layout:fixed;
@@ -1615,11 +1618,12 @@ dialog::backdrop {
   text-align:left;
   font-variant-numeric:tabular-nums
 }
-.portfolio-table .col-symbol { width:14% }
-.portfolio-table .col-qty { width:7% }
+.portfolio-table .col-symbol { width:13% }
+.portfolio-table .col-qty { width:6% }
 .portfolio-table .col-price { width:8% }
-.portfolio-table .col-flow { width:10% }
-.portfolio-table .col-alert { width:12% }
+.portfolio-table .col-flow { width:9% }
+.portfolio-table .col-alert { width:11% }
+.portfolio-table .col-trend { width:9% }
 .portfolio-table .col-change { width:8% }
 .portfolio-table .col-actions { width:52px }
 .portfolio-table th {
@@ -1641,6 +1645,38 @@ dialog::backdrop {
   font-size:12px;
   font-weight:600
 }
+.trend-link {
+  display:block;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:inherit;
+  text-align:left;
+  cursor:pointer
+}
+.trend-link:hover strong { text-decoration:underline }
+.trend-pair { display:flex; flex-direction:column; gap:2px; line-height:1.3 }
+.trend-short-up,.trend-long-up { color:var(--red) }
+.trend-short-down,.trend-long-down { color:var(--down) }
+.trend-short-flat,.trend-long-flat { color:#856500 }
+html[data-theme="dark"] .trend-short-flat,html[data-theme="dark"] .trend-long-flat { color:#e6be49 }
+.trend-pending { color:var(--muted) }
+html[data-moyu="on"] .trend-short-up,html[data-moyu="on"] .trend-long-up { color:var(--ink) }
+html[data-moyu="on"] .trend-short-down,html[data-moyu="on"] .trend-long-down { color:var(--muted) }
+html[data-moyu="on"] .trend-short-flat { color:var(--muted) }
+html[data-moyu="on"] .trend-long-flat { color:var(--faint) }
+.trend-dialog { width:min(1120px,calc(100vw - 48px)); height:min(780px,calc(100vh - 48px)) }
+.trend-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px }
+.trend-periods,.trend-toggles { display:flex; gap:6px }
+.trend-periods button,.trend-toggles button {
+  height:28px; padding:0 10px; border:1px solid var(--line); border-radius:999px;
+  background:transparent; color:var(--muted); font-size:12px
+}
+.trend-periods button[aria-pressed="true"],.trend-toggles button[aria-pressed="true"] {
+  background:var(--ink); color:var(--canvas); border-color:var(--ink)
+}
+.trend-status { margin:0 0 8px; color:var(--muted); font-size:12px }
+.trend-chart { height:calc(100% - 132px); min-height:420px }
 .portfolio-table td small {
   display:block;
   font-size:9px;

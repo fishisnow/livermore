@@ -1,8 +1,16 @@
+import { disposeTrendChart, renderTrendChart, resizeTrendChart } from "./trend-chart.js";
+
 const state = {
   sessionId: localStorage.getItem("livermore.sessionId") || "",
   sending: false,
   dashboard: null,
   positions: [],
+  trends: null,
+  trendSymbol: "",
+  trendName: "",
+  trendKtype: "1d",
+  trendModel: null,
+  trendOptions: { showMA: true, showBands: true, showVolume: true },
   view: "chat",
   taskConfig: null,
   taskConfigDirty: false,
@@ -325,6 +333,21 @@ document.querySelector("#close-portfolio-dialog").addEventListener("click", () =
 document.querySelector("#position-form").addEventListener("submit", savePosition);
 document.querySelector("#cancel-position-edit").addEventListener("click", resetPositionForm);
 document.querySelector("#run-portfolio-check").addEventListener("click", runPortfolioCheck);
+document.querySelector("#close-trend-dialog").addEventListener("click", closeHoldingTrend);
+document.querySelector("#trend-dialog").addEventListener("close", disposeTrendChart);
+document.querySelector("#trend-periods").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-ktype]");
+  if (!button || !state.trendSymbol) return;
+  openHoldingTrend(state.trendSymbol, state.trendName, button.dataset.ktype);
+});
+for (const [id, key] of [["#trend-toggle-ma", "showMA"], ["#trend-toggle-bands", "showBands"], ["#trend-toggle-volume", "showVolume"]]) {
+  document.querySelector(id).addEventListener("click", (event) => {
+    state.trendOptions[key] = !state.trendOptions[key];
+    event.currentTarget.setAttribute("aria-pressed", String(state.trendOptions[key]));
+    paintTrendChart();
+  });
+}
+window.addEventListener("resize", resizeTrendChart);
 document.querySelector("#atr-stop-multiplier").addEventListener("change", saveAtrMultiplier);
 document.querySelector("#capability-details").addEventListener("click", () => openCapabilities(true));
 document.querySelector("#close-capability-dialog").addEventListener("click", () => setView("chat"));
@@ -1407,6 +1430,72 @@ async function openPortfolio() {
   await setView("portfolio");
 }
 
+function renderTrend(position) {
+  const trend = state.trends?.[position.symbol];
+  if (!state.trends) return `<span class="trend-pending">读取中</span>`;
+  if (!trend || trend.error || (!trend.short && !trend.long)) return "—";
+  return `<span class="trend-pair"><span class="trend-short-${trend.short}">短${trendLabel(trend.short)}</span><span class="trend-long-${trend.long}">长${trendLabel(trend.long)}</span></span>`;
+}
+
+function trendLabel(value) {
+  return ({ up: "上升", down: "下降", flat: "横盘" })[value] || "—";
+}
+
+async function loadHoldingTrends() {
+  try {
+    const response = await fetch("/api/portfolio/trends");
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    state.trends = Object.fromEntries((result.trends || []).map((item) => [item.symbol, item]));
+  } catch (error) {
+    state.trends = Object.fromEntries(state.positions.map((position) => [position.symbol, { error: error.message }]));
+    showToast(`趋势读取失败：${error.message}`);
+  }
+  if (state.view === "portfolio") renderPortfolio(state.positions);
+}
+
+async function openHoldingTrend(symbol, name, ktype = "1d") {
+  state.trendSymbol = symbol;
+  state.trendName = name || symbol;
+  state.trendKtype = ktype;
+  const dialog = document.querySelector("#trend-dialog");
+  document.querySelector("#trend-title").textContent = `${state.trendName} · ${symbol}`;
+  document.querySelectorAll("#trend-periods [data-ktype]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.ktype === ktype));
+  });
+  if (!dialog.open) dialog.showModal();
+  document.querySelector("#trend-status").textContent = "正在读取 K 线…";
+  try {
+    const response = await fetch(`/api/portfolio/trend?symbol=${encodeURIComponent(symbol)}&ktype=${encodeURIComponent(ktype)}`);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    if (state.trendSymbol !== symbol || state.trendKtype !== ktype) return;
+    state.trendModel = result;
+    document.querySelector("#trend-status").textContent = `短期${trendLabel(result.short)} · 长期${trendLabel(result.long)}`;
+    paintTrendChart();
+  } catch (error) {
+    state.trendModel = null;
+    disposeTrendChart();
+    document.querySelector("#trend-status").textContent = error.message;
+  }
+}
+
+function paintTrendChart() {
+  if (!state.trendModel) return;
+  const root = document.documentElement;
+  renderTrendChart(document.querySelector("#trend-chart"), state.trendModel, {
+    ...state.trendOptions,
+    moyu: root.dataset.moyu === "on",
+    dark: root.dataset.theme === "dark",
+  });
+  requestAnimationFrame(resizeTrendChart);
+}
+
+function closeHoldingTrend() {
+  document.querySelector("#trend-dialog").close();
+  disposeTrendChart();
+}
+
 async function loadPortfolio() {
   try {
     const response = await fetch("/api/portfolio");
@@ -1416,6 +1505,7 @@ async function loadPortfolio() {
     const multiplier = document.querySelector("#atr-stop-multiplier");
     if (document.activeElement !== multiplier) multiplier.value = String(data.atrStopMultiplier ?? 2);
     renderPortfolio(data.positions);
+    void loadHoldingTrends();
   } catch (error) {
     showToast(`持仓读取失败：${error.message}`);
   }
@@ -1437,7 +1527,9 @@ function renderPortfolio(positions) {
   elements.portfolioRows.innerHTML = positions.map((position) => `
     <tr>
       <td data-label="标的">
-        <strong>${escapeHtml(position.latestName || position.symbol)}</strong>
+        <button type="button" class="trend-link" data-trend-symbol="${escapeHtml(position.symbol)}" data-trend-name="${escapeHtml(position.latestName || position.symbol)}">
+          <strong>${escapeHtml(position.latestName || position.symbol)}</strong>
+        </button>
         <small>${escapeHtml(position.symbol)} · ${formatPurchaseDate(position.purchasedAt)} 买入</small>
       </td>
       <td class="num" data-label="数量">${formatQuantity(position.quantity)}</td>
@@ -1448,6 +1540,7 @@ function renderPortfolio(positions) {
       <td data-label="价格预警">${renderPriceAlerts(position)}</td>
       <td data-label="持仓盈亏" class="num ${changeClass(position.pnlPct)}">${formatChange(position.pnlPct)}</td>
       <td data-label="当日" class="num ${changeClass(position.dayChangePct)}">${formatChange(position.dayChangePct)}</td>
+      <td data-label="趋势">${renderTrend(position)}</td>
       <td data-label="风险状态">
         <span class="risk-badge ${escapeHtml(position.severity || "unchecked")}">${riskLabel(position.severity)}</span>
         <small class="risk-summary">${escapeHtml(position.riskSummary || "等待首次巡检")}</small>
@@ -1458,6 +1551,9 @@ function renderPortfolio(positions) {
       </td>
     </tr>
   `).join("");
+  elements.portfolioRows.querySelectorAll("[data-trend-symbol]").forEach((button) => {
+    button.addEventListener("click", () => openHoldingTrend(button.dataset.trendSymbol, button.dataset.trendName));
+  });
   elements.portfolioRows.querySelectorAll("[data-edit-position]").forEach((button) => {
     button.addEventListener("click", () => editPosition(button.dataset.editPosition));
   });

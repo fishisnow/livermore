@@ -277,6 +277,7 @@
           <col class="col-alert">
           <col class="col-change">
           <col class="col-change">
+          <col class="col-trend">
           <col class="col-risk">
           <col class="col-actions">
         </colgroup>
@@ -291,6 +292,7 @@
             <th>价格预警</th>
             <th>持仓盈亏</th>
             <th>当日</th>
+            <th>趋势</th>
             <th>风险状态</th>
             <th><span class="sr-only">操作</span></th>
           </tr>
@@ -355,7 +357,34 @@
     </div>
   </dialog>
 
+  <dialog id="trend-dialog" class="trend-dialog">
+    <div class="dialog-head">
+      <div>
+        <p class="eyebrow">Trend</p>
+        <h2 id="trend-title">趋势</h2>
+      </div>
+      <button class="icon-button" id="close-trend-dialog" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="trend-toolbar">
+      <div class="trend-periods" id="trend-periods">
+        <button type="button" data-ktype="1d" aria-pressed="true">日K</button>
+        <button type="button" data-ktype="1w">周K</button>
+        <button type="button" data-ktype="1M">月K</button>
+        <button type="button" data-ktype="1Q">季K</button>
+        <button type="button" data-ktype="1Y">年K</button>
+      </div>
+      <div class="trend-toggles">
+        <button type="button" id="trend-toggle-ma" aria-pressed="true">MA</button>
+        <button type="button" id="trend-toggle-bands" aria-pressed="true">趋势</button>
+        <button type="button" id="trend-toggle-volume" aria-pressed="true">成交量</button>
+      </div>
+    </div>
+    <p id="trend-status" class="trend-status"></p>
+    <div id="trend-chart" class="trend-chart"></div>
+  </dialog>
+
   <div class="toast" id="toast" role="status" hidden></div>
+  <script src="/vendor/echarts.min.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
