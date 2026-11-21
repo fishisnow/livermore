@@ -129,12 +129,16 @@ export interface PortfolioPosition extends PortfolioPositionInput {
   alertBelow: number | null;
   alertAboveFiredAt: string | null;
   alertBelowFiredAt: string | null;
+  /** 最近一次 ATR 止损报警时间。价格回到止损价上方后清空，下一次跌破才会再报。 */
+  atrStopFiredAt: string | null;
   createdAt: string;
   updatedAt: string;
   latestName: string | null;
   latestPrice: number | null;
   pnlPct: number | null;
   dayChangePct: number | null;
+  /** 最近一次巡检写入的 A 股主力净流入，单位元。港股没有这项。 */
+  mainNetInflow: number | null;
   atr: number | null;
   atrStopLoss: number | null;
   severity: "normal" | "warning" | "critical" | null;
@@ -503,6 +507,7 @@ export class InvestmentDatabase {
       SET symbol = ?, quantity = ?, purchased_at = ?, cost_basis = ?,
           alert_above = ?, alert_below = ?,
           alert_above_fired_at = ?, alert_below_fired_at = ?,
+          atr_stop_fired_at = ?,
           updated_at = ?
       WHERE id = ?
     `).run(
@@ -510,6 +515,7 @@ export class InvestmentDatabase {
       alertAbove, alertBelow,
       sameNumber(current.alertAbove, alertAbove) ? current.alertAboveFiredAt : null,
       sameNumber(current.alertBelow, alertBelow) ? current.alertBelowFiredAt : null,
+      current.symbol === normalizeSymbol(input.symbol) ? current.atrStopFiredAt : null,
       new Date().toISOString(), id,
     );
     return this.getPosition(id);
@@ -541,6 +547,10 @@ export class InvestmentDatabase {
     this.db.prepare(`UPDATE portfolio_positions SET ${column} = ? WHERE id = ?`).run(firedAt, id);
   }
 
+  setAtrStopAlertFired(id: string, firedAt: string | null): void {
+    this.db.prepare("UPDATE portfolio_positions SET atr_stop_fired_at = ? WHERE id = ?").run(firedAt, id);
+  }
+
   deletePosition(id: string): boolean {
     return Number(this.db.prepare("DELETE FROM portfolio_positions WHERE id = ?").run(id).changes) > 0;
   }
@@ -549,6 +559,7 @@ export class InvestmentDatabase {
     return this.db.prepare(`
       SELECT p.*,
         c.name AS latest_name, c.current_price AS latest_price, c.pnl_pct, c.day_change_pct,
+        c.main_net_inflow AS latest_main_net_inflow,
         c.severity, c.risk_summary, c.checked_at AS last_checked_at
       FROM portfolio_positions p
       LEFT JOIN position_risk_checks c ON c.id = (
@@ -563,6 +574,7 @@ export class InvestmentDatabase {
     const row = this.db.prepare(`
       SELECT p.*,
         c.name AS latest_name, c.current_price AS latest_price, c.pnl_pct, c.day_change_pct,
+        c.main_net_inflow AS latest_main_net_inflow,
         c.severity, c.risk_summary, c.checked_at AS last_checked_at
       FROM portfolio_positions p
       LEFT JOIN position_risk_checks c ON c.id = (
@@ -779,7 +791,7 @@ export class InvestmentDatabase {
         id TEXT PRIMARY KEY, symbol TEXT NOT NULL, quantity REAL NOT NULL CHECK(quantity > 0),
         purchased_at TEXT NOT NULL, cost_basis REAL NOT NULL CHECK(cost_basis > 0),
         alert_above REAL, alert_below REAL, alert_above_fired_at TEXT, alert_below_fired_at TEXT,
-        atr REAL, atr_stop_loss REAL,
+        atr REAL, atr_stop_loss REAL, atr_stop_fired_at TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_portfolio_positions_symbol ON portfolio_positions(symbol);
@@ -810,6 +822,7 @@ export class InvestmentDatabase {
     this.ensureColumn("portfolio_positions", "alert_below_fired_at", "TEXT");
     this.ensureColumn("portfolio_positions", "atr", "REAL");
     this.ensureColumn("portfolio_positions", "atr_stop_loss", "REAL");
+    this.ensureColumn("portfolio_positions", "atr_stop_fired_at", "TEXT");
     this.ensureColumn("position_risk_checks", "atr", "REAL");
     this.ensureColumn("position_risk_checks", "atr_stop_loss", "REAL");
     this.seedMcpRegistry();
@@ -879,12 +892,14 @@ function mapPortfolioPosition(row: unknown): PortfolioPosition {
     alertBelow: nullableNumber(value.alert_below),
     alertAboveFiredAt: value.alert_above_fired_at === null || value.alert_above_fired_at === undefined ? null : String(value.alert_above_fired_at),
     alertBelowFiredAt: value.alert_below_fired_at === null || value.alert_below_fired_at === undefined ? null : String(value.alert_below_fired_at),
+    atrStopFiredAt: value.atr_stop_fired_at == null ? null : String(value.atr_stop_fired_at),
     createdAt: String(value.created_at),
     updatedAt: String(value.updated_at),
     latestName: value.latest_name === null ? null : String(value.latest_name),
     latestPrice: nullableNumber(value.latest_price),
     pnlPct: nullableNumber(value.pnl_pct),
     dayChangePct: nullableNumber(value.day_change_pct),
+    mainNetInflow: nullableNumber(value.latest_main_net_inflow),
     atr: nullableNumber(value.atr),
     atrStopLoss: nullableNumber(value.atr_stop_loss),
     severity: value.severity === null ? null : value.severity as PortfolioPosition["severity"],

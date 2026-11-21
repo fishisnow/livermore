@@ -1615,10 +1615,11 @@ dialog::backdrop {
   text-align:left;
   font-variant-numeric:tabular-nums
 }
-.portfolio-table .col-symbol { width:16% }
+.portfolio-table .col-symbol { width:14% }
 .portfolio-table .col-qty { width:7% }
-.portfolio-table .col-price { width:9% }
-.portfolio-table .col-alert { width:13% }
+.portfolio-table .col-price { width:8% }
+.portfolio-table .col-flow { width:10% }
+.portfolio-table .col-alert { width:12% }
 .portfolio-table .col-change { width:8% }
 .portfolio-table .col-actions { width:52px }
 .portfolio-table th {

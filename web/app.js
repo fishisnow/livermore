@@ -1443,6 +1443,7 @@ function renderPortfolio(positions) {
       <td class="num" data-label="数量">${formatQuantity(position.quantity)}</td>
       <td class="num" data-label="成本">${formatPrice(position.costBasis)}</td>
       <td class="num" data-label="最新价">${position.latestPrice == null ? "—" : formatPrice(position.latestPrice)}</td>
+      <td class="num ${changeClass(position.mainNetInflow)}" data-label="主力净流入">${renderMainFlow(position)}</td>
       <td class="num" data-label="ATR止损">${renderAtrStop(position)}</td>
       <td data-label="价格预警">${renderPriceAlerts(position)}</td>
       <td data-label="持仓盈亏" class="num ${changeClass(position.pnlPct)}">${formatChange(position.pnlPct)}</td>
@@ -2289,6 +2290,15 @@ function formatQuantity(value) {
 
 function renderAtrStop(position) {
   return position.atrStopLoss == null ? "—" : formatPrice(position.atrStopLoss);
+}
+
+function renderMainFlow(position) {
+  if (position.mainNetInflow == null) return "—";
+  const value = Number(position.mainNetInflow);
+  const absolute = Math.abs(value);
+  if (absolute >= 100_000_000) return `${(value / 100_000_000).toFixed(2)}亿`;
+  if (absolute >= 10_000) return `${(value / 10_000).toFixed(2)}万`;
+  return value.toFixed(2);
 }
 
 function renderPriceAlerts(position) {

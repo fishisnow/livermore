@@ -78,6 +78,18 @@ describe("portfolio ledger", () => {
       atrStopLoss: 1,
     });
     expect(edited).toMatchObject({ quantity: 20, costBasis: 310, atr: 8, atrStopLoss: 360 });
+    expect(created.atrStopFiredAt).toBeNull();
+    database.setAtrStopAlertFired(created.id, "2026-08-02T00:00:00.000Z");
+    expect(database.getPosition(created.id)?.atrStopFiredAt).toBe("2026-08-02T00:00:00.000Z");
+    const moved = database.updatePosition(created.id, {
+      symbol: "000001.SZ",
+      quantity: 200,
+      purchasedAt: "2026-07-01T01:30:00.000Z",
+      costBasis: 1_400,
+      alertAbove: 1_600,
+      alertBelow: 1_300,
+    });
+    expect(moved?.atrStopFiredAt).toBeNull();
     expect(database.listPositions()).toHaveLength(2);
     expect(database.deletePosition(created.id)).toBe(true);
     expect(database.deletePosition(stopped.id)).toBe(true);
@@ -156,6 +168,7 @@ describe("portfolio ledger", () => {
       latestName: "平安银行",
       latestPrice: 10.8,
       pnlPct: -10,
+      mainNetInflow: -100_000,
       severity: "critical",
       riskSummary: "持仓亏损达到风险线",
       lastCheckedAt: "2026-07-23T02:30:00.000Z",
@@ -220,6 +233,8 @@ describe("portfolio risk policy", () => {
       alertBelow: null,
       alertAboveFiredAt: null,
       alertBelowFiredAt: null,
+      atrStopFiredAt: null,
+      mainNetInflow: null,
       createdAt: "2026-07-01T01:30:00.000Z",
       updatedAt: "2026-07-01T01:30:00.000Z",
       latestName: null,
@@ -291,6 +306,18 @@ describe("portfolio risk policy", () => {
         telemetry,
         reportDirectory: directory,
         now: new Date("2026-07-24T02:30:00.000Z"),
+        queryMainFundFlow: async () => ({
+          source: "eastmoney",
+          query: "000001.SZ",
+          endpoint: "https://push2.eastmoney.com/api/qt/ulist.np/get",
+          success: true,
+          rows: [{
+            symbol: "000001.SZ",
+            code: "000001",
+            mainNetInflow: -100_000,
+            raw: {},
+          }],
+        }),
         runAgent: async () => ({
           analysis: "平安银行价格走弱，需人工复核资金面。行情与技术指标来自 Futu，主力资金来自东方财富。",
           futuResults: [{
@@ -350,6 +377,7 @@ describe("portfolio risk policy", () => {
         latestPrice: 10.8,
         atr: 0.42,
         atrStopLoss: 9.96,
+        mainNetInflow: -100_000,
         severity: "critical",
       });
       const report = await readFile(result.reportPath, "utf8");
@@ -388,6 +416,14 @@ describe("portfolio risk policy", () => {
         telemetry,
         reportDirectory: directory,
         now: new Date("2026-07-24T03:30:00.000Z"),
+        queryMainFundFlow: async () => ({
+          source: "eastmoney",
+          query: "000001.SZ",
+          endpoint: "https://push2.eastmoney.com/api/qt/ulist.np/get",
+          success: false,
+          message: "East Money fund-flow HTTP 502",
+          rows: [],
+        }),
         runAgent: async () => ({
           analysis: "Futu 行情正常；东方财富资金流向查询失败，主力资金暂缺。",
           futuResults: [{
@@ -432,6 +468,7 @@ describe("portfolio risk policy", () => {
       expect(report).toContain("本次查询失败，主力资金字段暂缺");
       expect(database.listPositions()[0]).toMatchObject({
         latestPrice: 10.2,
+        mainNetInflow: null,
         severity: "normal",
       });
     } finally {
@@ -482,14 +519,23 @@ describe("portfolio risk policy", () => {
       fundFlowQueryCount: 0,
     });
     try {
+      const queryMainFundFlow = async () => ({
+        source: "eastmoney" as const,
+        query: "000001.SZ",
+        endpoint: "https://push2.eastmoney.com/api/qt/ulist.np/get",
+        success: true,
+        rows: [{ symbol: "000001.SZ", code: "000001", mainNetInflow: 1_000, raw: {} }],
+      });
       await runPortfolioRiskCheck({
         config, database, telemetry, reportDirectory: directory, force: true,
         now: new Date("2026-07-24T02:30:00.000Z"),
+        queryMainFundFlow,
         runAgent: async () => quote(10.8),
       });
       await runPortfolioRiskCheck({
         config, database, telemetry, reportDirectory: directory, force: true,
         now: new Date("2026-07-24T03:30:00.000Z"),
+        queryMainFundFlow,
         runAgent: async () => quote(10.5),
       });
       const firstTitles = database.listAlerts().map((item) => item.title);
@@ -500,12 +546,14 @@ describe("portfolio risk policy", () => {
       await runPortfolioRiskCheck({
         config, database, telemetry, reportDirectory: directory, force: true,
         now: new Date("2026-07-24T04:30:00.000Z"),
+        queryMainFundFlow,
         runAgent: async () => quote(11.4),
       });
       expect(database.listPositions()[0]?.alertBelowFiredAt).toBeNull();
       await runPortfolioRiskCheck({
         config, database, telemetry, reportDirectory: directory, force: true,
         now: new Date("2026-07-24T05:30:00.000Z"),
+        queryMainFundFlow,
         runAgent: async () => quote(10.9),
       });
       expect(database.listAlerts().filter((item) => item.title.startsWith("Livermore 价格预警"))).toHaveLength(2);

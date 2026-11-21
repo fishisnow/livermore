@@ -22,6 +22,8 @@ import { queryJiucaishuoFearGreed } from "./market/jiucaishuo-fear-greed.js";
 import { queryAshareRiseFall } from "./market/futu-rise-fall.js";
 import { queryNationalTeamFlow } from "./market/national-team-etf-flow.js";
 import { entryAtrStop } from "./portfolio/entry-stop.js";
+import { PortfolioQuoteWatch } from "./market/portfolio-quote-watch.js";
+import { MessageCenter } from "./notifications/message-center.js";
 import { refreshMcpServerTools } from "./mcp/agent-tools.js";
 import { createMcpServer, deleteMcpServer, McpConfigError, toPublicMcp, updateMcpServer, resolveBriefingMcp } from "./mcp/registry.js";
 
@@ -50,8 +52,11 @@ server.on("error", async (error) => {
   process.exit(1);
 });
 
+const quoteWatch = new PortfolioQuoteWatch(config, database, (input) => new MessageCenter(config, database).publish(input));
+
 server.listen(config.webPort, "127.0.0.1", () => {
   database.recoverInterruptedChats();
+  quoteWatch.start();
   console.log(`Livermore Agent Web: ${config.webUiUrl}`);
 });
 
@@ -62,6 +67,7 @@ cleanup.unref();
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, async () => {
+    quoteWatch.stop();
     server.close();
     await sessions.shutdown();
     await telemetry.shutdown();

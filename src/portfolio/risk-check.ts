@@ -6,10 +6,14 @@ import { createInvestmentAgent } from "../agent/create-investment-agent.js";
 import type { AppConfig } from "../config.js";
 import { portfolioAtrStop } from "../market/atr.js";
 import type { FutuMarketResult } from "../market/futu-client.js";
-import type { EastmoneyFundFlowResult } from "../market/eastmoney-fund-flow.js";
+import {
+  queryEastmoneyMainFundFlow,
+  type EastmoneyFundFlowResult,
+} from "../market/eastmoney-fund-flow.js";
 import {
   findNormalizedQuote,
   isMainlandSecurity,
+  normalizeSecurityCode,
   type NormalizedMarketQuote,
 } from "../market/normalized-market.js";
 import { normalizePortfolioMarketData } from "../market/portfolio-market-normalizer.js";
@@ -47,6 +51,8 @@ export interface PortfolioRiskOptions {
   telemetry?: Telemetry;
   reportDirectory?: string;
   runAgent?: (input: PortfolioAgentInput) => Promise<PortfolioAgentResult>;
+  /** 巡检自己查询 A 股主力净流入。测试可替换，避免访问东方财富。 */
+  queryMainFundFlow?: (symbols: string[]) => Promise<EastmoneyFundFlowResult>;
 }
 
 export interface PortfolioAgentInput {
@@ -178,7 +184,12 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
         });
       const rawFutuRowCount = agentResult.futuResults
         .reduce((count, result) => count + result.rows.length, 0);
-      const rawFundFlowRowCount = agentResult.fundFlowResults
+      const inspectedFundFlow = await inspectMainlandFundFlow(positions, options.queryMainFundFlow ?? queryEastmoneyMainFundFlow);
+      const fundFlowResults = [
+        ...agentResult.fundFlowResults,
+        ...(inspectedFundFlow ? [inspectedFundFlow] : []),
+      ];
+      const rawFundFlowRowCount = fundFlowResults
         .reduce((count, result) => count + result.rows.length, 0);
       const marketQuotes = await telemetry.withSpan("market.normalize", {
         "openinference.span.kind": "CHAIN",
@@ -187,13 +198,15 @@ export async function runPortfolioRiskCheck(options: PortfolioRiskOptions): Prom
       }, async (span) => {
         const normalized = normalizePortfolioMarketData(
           agentResult.futuResults,
-          agentResult.fundFlowResults,
+          fundFlowResults,
         );
         span.setAttribute("livermore.market.normalized_quote_count", normalized.length);
         return normalized;
       });
       rootSpan.setAttribute("livermore.market.normalized_quote_count", marketQuotes.length);
-      const fundFlowUnavailable = agentResult.fundFlowResults.some((result) => !result.success);
+      const fundFlowUnavailable = positions.some((position) => (
+        isMainlandSecurity(position.symbol) && !hasMainFundFlow(marketQuotes, position.symbol)
+      ));
       rootSpan.setAttribute("livermore.eastmoney.fund_flow_unavailable", fundFlowUnavailable);
       const atrStopMultiplier = database.getAtrStopMultiplier();
       const assessed: AssessedPosition[] = [];
@@ -517,6 +530,32 @@ ${mainlandSymbols.length > 0
 3. 持仓说明里每只两句话：为什么是这个建议，以及建议何时失效。
 4. 不要另写研究过程章节，也不要复述行情数字。
 5. 最终输出只基于工具结果，不构成投资建议。`;
+}
+
+async function inspectMainlandFundFlow(
+  positions: PortfolioPosition[],
+  query: (symbols: string[]) => Promise<EastmoneyFundFlowResult>,
+): Promise<EastmoneyFundFlowResult | undefined> {
+  const symbols = [...new Set(positions
+    .map((position) => normalizeSecurityCode(position.symbol))
+    .filter((symbol): symbol is string => symbol !== undefined && isMainlandSecurity(symbol)))];
+  if (symbols.length === 0) return undefined;
+  try {
+    return await query(symbols);
+  } catch (error) {
+    return {
+      source: "eastmoney",
+      query: symbols.join(","),
+      endpoint: "https://push2.eastmoney.com/api/qt/ulist.np/get",
+      success: false,
+      message: error instanceof Error ? error.message : String(error),
+      rows: [],
+    };
+  }
+}
+
+function hasMainFundFlow(quotes: NormalizedMarketQuote[], symbol: string): boolean {
+  return findNormalizedQuote(quotes, symbol)?.mainNetInflow !== undefined;
 }
 
 function atrStopForAssessment(
