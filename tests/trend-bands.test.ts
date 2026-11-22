@@ -28,12 +28,32 @@ describe("trend bands", () => {
     expect(chart.direction).toBe("down");
   });
 
-  it("marks overlapping bands as flat even when all tracks are rising", () => {
-    const chart = buildTrendChart(bars(0.01));
+  it.each([
+    { step: 0.01, direction: "up" },
+    { step: -0.01, direction: "down" },
+  ])("marks an overlapping band with step $step as $direction when both rails agree", ({ step, direction }) => {
+    const chart = buildTrendChart(bars(step));
+    expect(chart.shortA.at(-1)!).toBeGreaterThan(chart.longB.at(-1)!);
+    expect(chart.shortB.at(-1)!).toBeLessThan(chart.longA.at(-1)!);
+    expect(chart.direction).toBe(direction);
+  });
+
+  it("marks a short band straddling the long band as oscillating", () => {
+    const history = bars(0);
+    history[history.length - 1] = { ...history.at(-1)!, high: 160, low: 140 };
+    const chart = buildTrendChart(history);
+    expect(chart.shortA.at(-1)!).toBeGreaterThan(chart.longA.at(-1)!);
+    expect(chart.shortB.at(-1)!).toBeLessThan(chart.longB.at(-1)!);
     expect(chart.direction).toBe("flat");
   });
 
-  it("marks touching bands as flat", () => {
+  it("keeps turnover separate from volume", () => {
+    const chart = buildTrendChart([{ ...bars(0)[0]!, volume: 0, turnover: 270_299_646_695.251 }]);
+    expect(chart.volumes).toEqual([0]);
+    expect(chart.turnovers).toEqual([270_299_646_695.251]);
+  });
+
+  it("marks identical bands as oscillating", () => {
     const chart = buildTrendChart(bars(0).map((bar) => ({ ...bar, high: bar.open, low: bar.open, close: bar.open })));
     expect(chart.direction).toBe("flat");
   });

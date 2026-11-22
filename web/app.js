@@ -1,4 +1,4 @@
-import { disposeTrendChart, renderTrendChart, resizeTrendChart } from "./trend-chart.js";
+import { disposeTrendChart, renderTrendChart, resizeTrendChart, trendActivity } from "./trend-chart.js";
 
 const state = {
   sessionId: localStorage.getItem("livermore.sessionId") || "",
@@ -7,8 +7,9 @@ const state = {
   positions: [],
   trends: null,
   trendSymbol: "",
+  trendSource: "portfolio",
+  trendRequest: null,
   trendName: "",
-  trendKtype: "1d",
   trendModel: null,
   trendOptions: { showMA: true, showBands: true, showVolume: true },
   view: "chat",
@@ -38,6 +39,8 @@ const elements = {
   dialogEvaluations: document.querySelector("#dialog-evaluations"),
   dialogReport: document.querySelector("#dialog-report"),
   portfolioDialog: document.querySelector("#portfolio-dialog"),
+  indicesDialog: document.querySelector("#indices-dialog"),
+  indicesRows: document.querySelector("#indices-rows"),
   portfolioRows: document.querySelector("#portfolio-rows"),
   portfolioEmpty: document.querySelector("#portfolio-empty"),
   positionForm: document.querySelector("#position-form"),
@@ -109,6 +112,7 @@ document.querySelector("#native-settings").addEventListener("click", () => nativ
 const views = {
   chat: ["研究对话", "与你的本地投资 Agent 一起研究"],
   portfolio: ["我的持仓", "持仓维护 · 风险监测 · 操作建议"],
+  indices: ["指数大盘", ""],
   tasks: ["定时任务", "选择任务后，只显示该任务的运行记录"],
   charts: ["", ""],
   capabilities: ["研究能力", "已安装的 Skills、MCP 与数据连接"],
@@ -117,7 +121,12 @@ const chartState = { fearGreed: null, fearGreedRange: 366, equityBond: null, equ
 const EQUITY_BOND_CHOICES = [["881001.WI", "万得全A"], ["000300.SH", "沪深300"], ["000905.SH", "中证500"], ["000016.SH", "上证50"]];
 const EQUITY_BOND_METHODS = [["fed", "FED"], ["gxl", "股息率"]];
 // Reuse the existing functional panels without modal nesting or duplicate controls.
-for (const panel of [elements.portfolioDialog, elements.capabilityDialog]) {
+const workspacePanels = {
+  portfolio: elements.portfolioDialog,
+  indices: elements.indicesDialog,
+  capabilities: elements.capabilityDialog,
+};
+for (const panel of Object.values(workspacePanels)) {
   panel.classList.add("workspace-panel");
   panel.tabIndex = -1;
   document.querySelector(".workspace").append(panel);
@@ -135,14 +144,15 @@ async function setView(view, { refresh = false } = {}) {
     if (selected) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
-  for (const [name, panel] of [["portfolio", elements.portfolioDialog], ["capabilities", elements.capabilityDialog]]) {
+  for (const [name, panel] of Object.entries(workspacePanels)) {
     if (view === name && !panel.open) { panel.show(); panel.focus({ preventScroll: true }); }
     else if (view !== name && panel.open) panel.close();
   }
   if (view === "portfolio") {
     if (!document.querySelector("#position-purchased-at").value) document.querySelector("#position-purchased-at").value = toDateTimeLocal(new Date());
     await loadPortfolio();
-  } else if (view === "capabilities") await loadCapabilities(refresh);
+  } else if (view === "indices") await loadMarketIndices();
+  else if (view === "capabilities") await loadCapabilities(refresh);
   else if (view === "charts") await loadCharts();
   if (view !== "charts" && chartState.expandedChart) {
     chartState.expandedChart = null;
@@ -333,12 +343,17 @@ document.querySelector("#close-portfolio-dialog").addEventListener("click", () =
 document.querySelector("#position-form").addEventListener("submit", savePosition);
 document.querySelector("#cancel-position-edit").addEventListener("click", resetPositionForm);
 document.querySelector("#run-portfolio-check").addEventListener("click", runPortfolioCheck);
+document.querySelector("#refresh-indices").addEventListener("click", loadMarketIndices);
+elements.indicesRows.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-trend-symbol]");
+  if (button) openTrend(button.dataset.trendSymbol, button.dataset.trendName, "1d", "indices");
+});
 document.querySelector("#close-trend-dialog").addEventListener("click", closeHoldingTrend);
-document.querySelector("#trend-dialog").addEventListener("close", disposeTrendChart);
+document.querySelector("#trend-dialog").addEventListener("close", clearTrendChart);
 document.querySelector("#trend-periods").addEventListener("click", (event) => {
   const button = event.target.closest("[data-ktype]");
   if (!button || !state.trendSymbol) return;
-  openHoldingTrend(state.trendSymbol, state.trendName, button.dataset.ktype);
+  openTrend(state.trendSymbol, state.trendName, button.dataset.ktype, state.trendSource);
 });
 for (const [id, key] of [["#trend-toggle-ma", "showMA"], ["#trend-toggle-bands", "showBands"], ["#trend-toggle-volume", "showVolume"]]) {
   document.querySelector(id).addEventListener("click", (event) => {
@@ -1431,8 +1446,11 @@ async function openPortfolio() {
 }
 
 function renderTrend(position) {
-  const trend = state.trends?.[position.symbol];
   if (!state.trends) return `<span class="trend-pending">读取中</span>`;
+  return renderTrendCell(state.trends[position.symbol]);
+}
+
+function renderTrendCell(trend) {
   if (!trend?.direction || trend.error) return "—";
   const labels = trendLabels(trend);
   const ma5Label = ({ above: "站上5日", below: "5日压制" })[trend.ma5Position];
@@ -1441,9 +1459,45 @@ function renderTrend(position) {
 }
 
 function trendLabels({ direction, reversal }) {
-  const label = ({ up: "上升", down: "下降", flat: "横盘" })[direction] || "—";
+  const label = ({ up: "上升", down: "下降", flat: "震荡" })[direction] || "—";
   const reversalLabel = ({ strong: "强势反转", weak: "弱势反转" })[reversal];
   return reversalLabel ? [label, reversalLabel] : [label];
+}
+
+function trendDisplayCode(symbol) {
+  return symbol.replace(/^(?:US|SH|SZ|HK|BJ)(?:[.:-]|(?=\d+$))|[.:-](?:US|SH|SZ|HK|BJ)$/g, "");
+}
+
+async function loadMarketIndices() {
+  const button = document.querySelector("#refresh-indices");
+  if (button.disabled) return;
+  const status = document.querySelector("#indices-load-status");
+  button.disabled = true;
+  status.hidden = false;
+  status.textContent = "正在读取指数日 K 线…";
+  try {
+    const response = await fetch("/api/indices");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const { indices } = await response.json();
+    elements.indicesRows.innerHTML = indices.map((index) => `
+      <tr>
+        <td>
+          <button type="button" class="trend-link" data-trend-symbol="${escapeHtml(index.symbol)}" data-trend-name="${escapeHtml(index.name)}">
+            <strong>${escapeHtml(index.name)}</strong>
+          </button>
+          <small>${escapeHtml(index.market)} · ${escapeHtml(trendDisplayCode(index.symbol))}</small>
+        </td>
+        <td class="num">${index.error ? `<span title="${escapeHtml(index.error)}">暂不可用</span>` : formatPrice(index.latest, 2)}</td>
+        <td class="num ${changeClass(index.dayChangePct)}">${formatChange(index.dayChangePct)}</td>
+        <td>${renderTrendCell(index)}</td>
+      </tr>
+    `).join("");
+    status.hidden = true;
+  } catch (error) {
+    status.textContent = `指数读取失败（${error.message}），请刷新重试。`;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function loadHoldingTrends() {
@@ -1459,28 +1513,38 @@ async function loadHoldingTrends() {
   if (state.view === "portfolio") renderPortfolio(state.positions);
 }
 
-async function openHoldingTrend(symbol, name, ktype = "1d") {
+async function openTrend(symbol, name, ktype = "1d", source = "portfolio") {
+  state.trendSource = source;
+  clearTrendChart();
+  const request = new AbortController();
+  state.trendRequest = request;
   state.trendSymbol = symbol;
-  state.trendName = name || symbol;
-  state.trendKtype = ktype;
+  const code = trendDisplayCode(symbol);
+  state.trendName = name && name !== symbol ? name : code;
   const dialog = document.querySelector("#trend-dialog");
-  document.querySelector("#trend-title").textContent = `${state.trendName} · ${symbol}`;
+  document.querySelector("#trend-title").textContent = state.trendName === code ? code : `${state.trendName} · ${code}`;
   document.querySelectorAll("#trend-periods [data-ktype]").forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.ktype === ktype));
   });
   if (!dialog.open) dialog.showModal();
   document.querySelector("#trend-status").textContent = "正在读取 K 线…";
   try {
-    const response = await fetch(`/api/portfolio/trend?symbol=${encodeURIComponent(symbol)}&ktype=${encodeURIComponent(ktype)}`);
+    const query = new URLSearchParams({ symbol, ktype });
+    const response = await fetch(`/api/${source}/trend?${query}`, { signal: request.signal });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-    if (state.trendSymbol !== symbol || state.trendKtype !== ktype) return;
+    if (request.signal.aborted) return;
     state.trendModel = result;
+    const activityButton = document.querySelector("#trend-toggle-volume");
+    const turnoverOnly = source === "indices";
+    const activity = trendActivity(result, turnoverOnly);
+    activityButton.textContent = activity?.label ?? (turnoverOnly ? "暂无成交额" : "暂无成交量");
+    activityButton.disabled = !activity;
     document.querySelector("#trend-status").textContent = trendLabels(result).join(" · ");
     paintTrendChart();
   } catch (error) {
-    state.trendModel = null;
-    disposeTrendChart();
+    if (request.signal.aborted) return;
+    clearTrendChart();
     document.querySelector("#trend-status").textContent = error.message;
   }
 }
@@ -1490,6 +1554,7 @@ function paintTrendChart() {
   const root = document.documentElement;
   renderTrendChart(document.querySelector("#trend-chart"), state.trendModel, {
     ...state.trendOptions,
+    turnoverOnly: state.trendSource === "indices",
     moyu: root.dataset.moyu === "on",
     dark: root.dataset.theme === "dark",
   });
@@ -1498,6 +1563,15 @@ function paintTrendChart() {
 
 function closeHoldingTrend() {
   document.querySelector("#trend-dialog").close();
+}
+
+function clearTrendChart() {
+  state.trendRequest?.abort();
+  state.trendRequest = null;
+  state.trendModel = null;
+  const activityButton = document.querySelector("#trend-toggle-volume");
+  activityButton.textContent = state.trendSource === "indices" ? "成交额" : "成交量";
+  activityButton.disabled = true;
   disposeTrendChart();
 }
 
@@ -1557,7 +1631,7 @@ function renderPortfolio(positions) {
     </tr>
   `).join("");
   elements.portfolioRows.querySelectorAll("[data-trend-symbol]").forEach((button) => {
-    button.addEventListener("click", () => openHoldingTrend(button.dataset.trendSymbol, button.dataset.trendName));
+    button.addEventListener("click", () => openTrend(button.dataset.trendSymbol, button.dataset.trendName));
   });
   elements.portfolioRows.querySelectorAll("[data-edit-position]").forEach((button) => {
     button.addEventListener("click", () => editPosition(button.dataset.editPosition));
@@ -2423,8 +2497,8 @@ function optionalAlertPrice(selector) {
   return value;
 }
 
-function formatPrice(value) {
-  return new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value);
+function formatPrice(value, maximumFractionDigits = 4) {
+  return new Intl.NumberFormat("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits }).format(value);
 }
 
 function formatChange(value) {

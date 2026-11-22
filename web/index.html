@@ -20,6 +20,7 @@
   <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
     <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 11.5a8 8 0 0 1-8 8H5l-4 3V11.5a9.5 9.5 0 0 1 19 0Z"/></symbol>
     <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 3v17h17M8 15l4-6 4 3 5-7"/></symbol>
+    <symbol id="i-indices" viewBox="0 0 24 24"><path d="M5 3v4m0 6v4m7-11v4m0 6v5m7-18v4m0 6v5"/><rect x="3" y="7" width="4" height="6" rx="1"/><rect x="10" y="10" width="4" height="6" rx="1"/><rect x="17" y="7" width="4" height="6" rx="1"/></symbol>
     <symbol id="i-tasks" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="m8 8 1 1 2-2m3 1h3m-9 6 1 1 2-2m3 1h3"/></symbol>
     <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
     <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></symbol>
@@ -43,6 +44,7 @@
     <nav class="app-rail" aria-label="主导航">
       <div class="rail-group">
         <button class="rail-button selected" data-view-target="chat" type="button" aria-current="page" title="研究对话"><svg class="icon"><use href="#i-chat"/></svg></button>
+        <button class="rail-button" data-view-target="indices" type="button" title="指数大盘" aria-label="指数大盘"><svg class="icon"><use href="#i-indices"/></svg></button>
         <button class="rail-button" data-view-target="portfolio" type="button" title="我的持仓"><svg class="icon"><use href="#i-chart"/></svg><span class="rail-count" id="nav-position-count"></span></button>
         <button class="rail-button" data-view-target="tasks" type="button" title="定时任务"><svg class="icon"><use href="#i-tasks"/></svg><span class="rail-count" id="nav-task-count"></span></button>
         <button class="rail-button" data-view-target="charts" type="button" title="图表"><svg class="icon"><use href="#i-panels"/></svg></button>
@@ -211,6 +213,29 @@
       </div>
       <div class="task-config-footer"><p id="task-config-error" role="alert"></p><div class="dialog-head-actions"><button id="delete-custom-task" class="danger-action" type="button" hidden>删除任务</button><button id="save-task-config" class="primary-button" type="submit">保存配置</button></div></div>
     </form>
+  </dialog>
+
+  <dialog id="indices-dialog" aria-labelledby="indices-title">
+    <div class="dialog-head">
+      <h2 id="indices-title">指数大盘</h2>
+      <div class="dialog-head-actions">
+        <button class="secondary-action" id="refresh-indices" type="button">刷新</button>
+      </div>
+    </div>
+    <p id="indices-load-status" class="indices-load-status" role="status" hidden></p>
+    <div class="portfolio-table-wrap">
+      <table class="portfolio-table indices-table" aria-labelledby="indices-title">
+        <thead>
+          <tr>
+            <th scope="col">指数</th>
+            <th scope="col">日线点位</th>
+            <th scope="col">日涨跌幅</th>
+            <th scope="col">趋势</th>
+          </tr>
+        </thead>
+        <tbody id="indices-rows"></tbody>
+      </table>
+    </div>
   </dialog>
 
   <dialog id="portfolio-dialog" class="portfolio-dialog">

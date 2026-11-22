@@ -1109,7 +1109,7 @@ body:not([data-view="chat"]) .workspace {
 body:not([data-view="chat"]) #toggle-inspector {
   visibility:hidden
 }
-body[data-view="charts"] .toolbar-title { display:none; }
+body[data-view="charts"] .toolbar-title,body[data-view="indices"] .toolbar-title { display:none; }
 body[data-view="tasks"] .tasks-page,body[data-view="charts"] .charts-page {
   display:block;
   height:100%;
@@ -1626,6 +1626,9 @@ html[data-moyu="on"] .portfolio-table-wrap {
 .portfolio-table .col-trend { width:9% }
 .portfolio-table .col-change { width:8% }
 .portfolio-table .col-actions { width:52px }
+.indices-table { min-width:400px }
+.indices-table th:first-child { width:34% }
+.indices-load-status { margin:0 0 10px; color:var(--muted); font-size:12px }
 .portfolio-table th {
   font-size:10px;
   color:var(--muted);

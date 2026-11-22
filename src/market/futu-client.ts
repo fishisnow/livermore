@@ -326,6 +326,7 @@ export interface FutuHistoryBar {
   low: number;
   close: number;
   volume: number;
+  turnover?: number;
 }
 
 const HISTORY_KTYPES = new Set(["1d", "1w", "1M", "1Q", "1Y"]);
@@ -354,7 +355,8 @@ export async function queryFutuHistoryKline(
     const close = positiveNumber(row.close);
     if (!date || open === undefined || high === undefined || low === undefined || close === undefined) return [];
     const volume = Number(row.volume);
-    return [{ date, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0 }];
+    const turnover = positiveNumber(row.turnover) ?? 0;
+    return [{ date, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0, turnover }];
   });
 }
 

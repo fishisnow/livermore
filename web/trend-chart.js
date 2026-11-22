@@ -31,9 +31,21 @@ export function disposeTrendChart() {
   chart = null;
 }
 
+export function trendActivity(model, turnoverOnly = false) {
+  if (!turnoverOnly && model.volumes.some((value) => value > 0)) {
+    return { label: "成交量", values: model.volumes, unit: "" };
+  }
+  if (model.turnovers?.some((value) => value > 0)) {
+    const unit = model.futuCode?.startsWith("HK.") ? "港元" : "元";
+    return { label: "成交额", values: model.turnovers, unit };
+  }
+  return null;
+}
+
 function chartOption(model, options) {
   const colors = palette(options);
-  const showVolume = options.showVolume && model.volumes.some((value) => value > 0);
+  const activity = trendActivity(model, options.turnoverOnly);
+  const showActivity = options.showVolume && activity;
   const zoomStart = model.dates.length > 80 ? 70 : 0;
   const series = [
     {
@@ -66,10 +78,10 @@ function chartOption(model, options) {
       line("", model.longBDown, colors.longDown, 3),
       stick("短期上升", model.shortStickUp, colors.shortUp),
       stick("短期下降", model.shortStickDown, colors.shortDown),
-      stick("短期横盘", model.shortStickFlat, colors.shortFlat),
+      stick("短期震荡", model.shortStickFlat, colors.shortFlat),
       stick("长期上升", model.longStickUp, colors.longUp),
       stick("长期下降", model.longStickDown, colors.longDown),
-      stick("长期横盘", model.longStickFlat, colors.longFlat),
+      stick("长期震荡", model.longStickFlat, colors.longFlat),
     );
   }
   if (options.showMA) {
@@ -79,16 +91,16 @@ function chartOption(model, options) {
       line("MA20", model.ma20, colors.ma20, 5),
     );
   }
-  if (showVolume) {
+  if (showActivity) {
     series.push({
       type: "bar",
-      name: "成交量",
+      name: activity.label,
       xAxisIndex: 1,
       yAxisIndex: 1,
-      data: model.volumes.map((volume, index) => {
+      data: activity.values.map((value, index) => {
         const candle = model.candles[index];
         const rising = candle ? candle[1] >= candle[0] : true;
-        return { value: volume, itemStyle: { color: rising ? colors.up : colors.down, opacity: 0.45 } };
+        return { value, itemStyle: { color: rising ? colors.up : colors.down, opacity: 0.45 } };
       }),
       barMaxWidth: 14,
     });
@@ -102,23 +114,23 @@ function chartOption(model, options) {
       backgroundColor: colors.tooltip,
       borderColor: colors.line,
       textStyle: { color: colors.ink, fontSize: 12 },
-      formatter: (params) => tooltip(params, model, colors),
+      formatter: (params) => tooltip(params, model, colors, activity),
     },
-    grid: showVolume
+    grid: showActivity
       ? [
           { left: 12, right: 58, top: 16, bottom: 168 },
           { left: 12, right: 58, height: 96, bottom: 36 },
         ]
       : [{ left: 12, right: 58, top: 16, bottom: 36 }],
-    xAxis: showVolume
+    xAxis: showActivity
       ? [categoryAxis(model.dates, colors, false), categoryAxis(model.dates, colors, true, 1)]
       : [categoryAxis(model.dates, colors, true)],
-    yAxis: showVolume
+    yAxis: showActivity
       ? [priceAxis(colors), { gridIndex: 1, scale: true, axisLabel: { show: false }, splitLine: { show: false } }]
       : [priceAxis(colors)],
     dataZoom: [{
       type: "inside",
-      xAxisIndex: showVolume ? [0, 1] : [0],
+      xAxisIndex: showActivity ? [0, 1] : [0],
       start: zoomStart,
       end: 100,
     }],
@@ -206,7 +218,7 @@ function fitPriceScale(chart, model) {
   chart.setOption({ yAxis: [{ min: min - pad, max: max + pad }] });
 }
 
-function tooltip(params, model, colors) {
+function tooltip(params, model, colors, activity) {
   const row = Array.isArray(params) ? params[0] : params;
   if (!row) return "";
   const candle = model.candles[row.dataIndex];
@@ -215,7 +227,7 @@ function tooltip(params, model, colors) {
   const previous = row.dataIndex > 0 ? model.candles[row.dataIndex - 1]?.[1] : open;
   const change = previous ? ((close - previous) / previous) * 100 : 0;
   const tone = close >= previous ? colors.up : colors.down;
-  const volume = model.volumes[row.dataIndex] ?? 0;
+  const amount = activity?.values[row.dataIndex];
   return [
     `<div style="min-width:180px">`,
     `<strong>${model.dates[row.dataIndex]}</strong>`,
@@ -224,7 +236,7 @@ function tooltip(params, model, colors) {
     rowText("最低", formatPrice(low), colors.down),
     rowText("收盘", formatPrice(close), tone),
     rowText("涨跌幅", `${change >= 0 ? "+" : ""}${change.toFixed(2)}%`, tone),
-    rowText("成交量", formatVolume(volume), colors.ink),
+    activity && amount != null ? rowText(activity.label, formatActivity(amount) + activity.unit, colors.ink) : "",
     `</div>`,
   ].join("");
 }
@@ -237,10 +249,10 @@ function formatPrice(value) {
   return Number(value).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
 }
 
-function formatVolume(value) {
+function formatActivity(value) {
   if (value >= 100_000_000) return `${(value / 100_000_000).toFixed(2)}亿`;
   if (value >= 10_000) return `${(value / 10_000).toFixed(1)}万`;
-  return String(value);
+  return formatPrice(value);
 }
 
 function palette(options) {

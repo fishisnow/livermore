@@ -5,6 +5,7 @@ export interface TrendBar {
   low: number;
   close: number;
   volume: number;
+  turnover?: number;
 }
 
 export type TrendDirection = "up" | "down" | "flat";
@@ -14,6 +15,7 @@ export interface TrendChartModel {
   dates: string[];
   candles: Array<[number, number, number, number]>;
   volumes: number[];
+  turnovers: number[];
   ma5: Array<number | null>;
   ma10: Array<number | null>;
   ma20: Array<number | null>;
@@ -43,6 +45,7 @@ export function buildTrendChart(bars: TrendBar[]): TrendChartModel {
   const dates = bars.map((bar) => bar.date);
   const candles = bars.map((bar) => [bar.open, bar.close, bar.low, bar.high] as [number, number, number, number]);
   const volumes = bars.map((bar) => bar.volume);
+  const turnovers = bars.map((bar) => bar.turnover ?? 0);
   const highs = bars.map((bar) => bar.high);
   const lows = bars.map((bar) => bar.low);
   const ma5 = movingAverage(bars, 5);
@@ -81,6 +84,7 @@ export function buildTrendChart(bars: TrendBar[]): TrendChartModel {
     dates,
     candles,
     volumes,
+    turnovers,
     ma5,
     ma10: movingAverage(bars, 10),
     ma20: movingAverage(bars, 20),
@@ -138,8 +142,12 @@ function compareBands(
   longB: number | null | undefined,
 ): TrendDirection | null {
   if (shortA == null || shortB == null || longA == null || longB == null) return null;
-  if (Math.min(shortA, shortB) > Math.max(longA, longB)) return "up";
-  if (Math.max(shortA, shortB) < Math.min(longA, longB)) return "down";
+  const shortUpper = Math.max(shortA, shortB);
+  const shortLower = Math.min(shortA, shortB);
+  const longUpper = Math.max(longA, longB);
+  const longLower = Math.min(longA, longB);
+  if (shortUpper > longUpper && shortLower > longLower) return "up";
+  if (shortUpper < longUpper && shortLower < longLower) return "down";
   return "flat";
 }
 
