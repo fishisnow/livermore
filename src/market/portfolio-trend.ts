@@ -1,15 +1,20 @@
 import type { AppConfig } from "../config.js";
+import type { PortfolioPosition } from "../storage/database.js";
 import { queryFutuHistoryKline } from "./futu-client.js";
 import { toFutuSecurityCode } from "./normalized-market.js";
-import { buildTrendChart, type TrendChartModel, type TrendDirection } from "./trend-bands.js";
+import { buildTrendChart, type Ma5Position, type TrendChartModel, type TrendDirection } from "./trend-bands.js";
 
 export const TREND_KTYPES = ["1d", "1w", "1M", "1Q", "1Y"] as const;
 export type TrendKtype = (typeof TREND_KTYPES)[number];
 
+type HoldingQuote = Pick<PortfolioPosition, "latestPrice" | "lastCheckedAt">;
+type TrendReversal = "strong" | "weak";
+
 export interface HoldingTrendSummary {
   symbol: string;
-  short: TrendDirection | null;
-  long: TrendDirection | null;
+  direction: TrendDirection | null;
+  reversal: TrendReversal | null;
+  ma5Position: Ma5Position | null;
   error?: string;
 }
 
@@ -39,15 +44,46 @@ export async function loadHoldingTrend(config: AppConfig, symbol: string, ktype:
   return chart;
 }
 
-export async function loadHoldingTrends(config: AppConfig, symbols: string[]): Promise<HoldingTrendSummary[]> {
-  return mapPool(symbols, 3, async (symbol) => {
+export async function loadHoldingTrends(config: AppConfig, positions: Array<HoldingQuote & { symbol: string }>): Promise<HoldingTrendSummary[]> {
+  return mapPool(positions, 3, async (position) => {
+    const { symbol } = position;
     try {
       const chart = await loadHoldingTrend(config, symbol, "1d");
-      return { symbol, short: chart.short, long: chart.long };
+      return {
+        symbol,
+        direction: chart.direction,
+        reversal: holdingTrendReversal(chart, position),
+        ma5Position: chart.ma5Position,
+      };
     } catch (error) {
-      return { symbol, short: null, long: null, error: error instanceof Error ? error.message : String(error) };
+      return {
+        symbol,
+        direction: null,
+        reversal: null,
+        ma5Position: null,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   });
+}
+
+export function holdingTrendReversal(chart: TrendChartModel, quote?: HoldingQuote): TrendReversal | null {
+  if (chart.direction !== "down") return null;
+  const date = chart.dates.at(-1);
+  let price = chart.candles.at(-1)?.[1];
+  if (date && quote?.latestPrice != null && quote.lastCheckedAt
+    && shanghaiDate(new Date(quote.lastCheckedAt)) >= date) {
+    price = quote.latestPrice;
+  }
+
+  const shortA = chart.shortA.at(-1);
+  const shortB = chart.shortB.at(-1);
+  const longA = chart.longA.at(-1);
+  const longB = chart.longB.at(-1);
+  if (price == null || shortA == null || shortB == null || longA == null || longB == null) return null;
+  if (price > Math.max(longA, longB)) return "strong";
+  if (price > Math.max(shortA, shortB)) return "weak";
+  return null;
 }
 
 function trendRange(ktype: TrendKtype): { start: string; end: string } {

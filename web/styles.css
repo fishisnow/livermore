@@ -1655,16 +1655,13 @@ html[data-moyu="on"] .portfolio-table-wrap {
   cursor:pointer
 }
 .trend-link:hover strong { text-decoration:underline }
-.trend-pair { display:flex; flex-direction:column; gap:2px; line-height:1.3 }
-.trend-short-up,.trend-long-up { color:var(--red) }
-.trend-short-down,.trend-long-down { color:var(--down) }
-.trend-short-flat,.trend-long-flat { color:#856500 }
-html[data-theme="dark"] .trend-short-flat,html[data-theme="dark"] .trend-long-flat { color:#e6be49 }
+.trend-up { color:var(--red) }
+.trend-down { color:var(--down) }
+.trend-flat { color:#856500 }
+html[data-theme="dark"] .trend-flat { color:#e6be49 }
 .trend-pending { color:var(--muted) }
-html[data-moyu="on"] .trend-short-up,html[data-moyu="on"] .trend-long-up { color:var(--ink) }
-html[data-moyu="on"] .trend-short-down,html[data-moyu="on"] .trend-long-down { color:var(--muted) }
-html[data-moyu="on"] .trend-short-flat { color:var(--muted) }
-html[data-moyu="on"] .trend-long-flat { color:var(--faint) }
+html[data-moyu="on"] .trend-up { color:var(--ink) }
+html[data-moyu="on"] .trend-down,html[data-moyu="on"] .trend-flat { color:var(--muted) }
 .trend-dialog { width:min(1120px,calc(100vw - 48px)); height:min(780px,calc(100vh - 48px)) }
 .trend-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px }
 .trend-periods,.trend-toggles { display:flex; gap:6px }

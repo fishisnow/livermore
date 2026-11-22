@@ -8,6 +8,7 @@ export interface TrendBar {
 }
 
 export type TrendDirection = "up" | "down" | "flat";
+export type Ma5Position = "above" | "below";
 
 export interface TrendChartModel {
   dates: string[];
@@ -34,17 +35,17 @@ export interface TrendChartModel {
   longStickUp: Array<[string, number, number]>;
   longStickDown: Array<[string, number, number]>;
   longStickFlat: Array<[string, number, number]>;
-  short: TrendDirection | null;
-  long: TrendDirection | null;
+  direction: TrendDirection | null;
+  ma5Position: Ma5Position | null;
 }
 
-/** 与 stock-scope 的趋势带一致：上下轨同时抬升为上升，同时回落为下降，否则横盘。 */
 export function buildTrendChart(bars: TrendBar[]): TrendChartModel {
   const dates = bars.map((bar) => bar.date);
   const candles = bars.map((bar) => [bar.open, bar.close, bar.low, bar.high] as [number, number, number, number]);
   const volumes = bars.map((bar) => bar.volume);
   const highs = bars.map((bar) => bar.high);
   const lows = bars.map((bar) => bar.low);
+  const ma5 = movingAverage(bars, 5);
   const shortA = ema(highs, 24);
   const shortB = ema(lows, 23);
   const longA = ema(highs, 89);
@@ -59,8 +60,6 @@ export function buildTrendChart(bars: TrendBar[]): TrendChartModel {
   const longFlat: boolean[] = [];
   const longInside: boolean[] = [];
   const longOrdered: boolean[] = [];
-  const shortTypes: number[] = [];
-  const longTypes: number[] = [];
 
   for (let index = 0; index < bars.length; index += 1) {
     const close = bars[index]?.close ?? null;
@@ -70,21 +69,19 @@ export function buildTrendChart(bars: TrendBar[]): TrendChartModel {
     shortUp.push(shortState.up);
     shortDown.push(shortState.down);
     shortFlat.push(shortState.flat);
-    shortTypes.push(shortState.type);
     const longState = bandState(close, longA[index] ?? null, longB[index] ?? null, index > 0 ? longA[index - 1] ?? null : null, index > 0 ? longB[index - 1] ?? null : null);
     longOrdered.push(longState.ordered);
     longInside.push(longState.inside);
     longUp.push(longState.up);
     longDown.push(longState.down);
     longFlat.push(longState.flat);
-    longTypes.push(longState.type);
   }
 
   return {
     dates,
     candles,
     volumes,
-    ma5: movingAverage(bars, 5),
+    ma5,
     ma10: movingAverage(bars, 10),
     ma20: movingAverage(bars, 20),
     shortA,
@@ -105,9 +102,16 @@ export function buildTrendChart(bars: TrendBar[]): TrendChartModel {
     longStickUp: sticks(dates, longA, longB, longOrdered, longInside, longUp),
     longStickDown: sticks(dates, longA, longB, longOrdered, longInside, longDown),
     longStickFlat: sticks(dates, longA, longB, longOrdered, longInside, longFlat),
-    short: direction(shortTypes.at(-1)),
-    long: direction(longTypes.at(-1)),
+    direction: compareBands(shortA.at(-1), shortB.at(-1), longA.at(-1), longB.at(-1)),
+    ma5Position: candleBodyPosition(bars.at(-1), ma5.at(-1)),
   };
+}
+
+function candleBodyPosition(bar: TrendBar | undefined, average: number | null | undefined): Ma5Position | null {
+  if (!bar || average == null) return null;
+  if (bar.open > average && bar.close > average) return "above";
+  if (bar.open < average && bar.close < average) return "below";
+  return null;
 }
 
 function bandState(
@@ -116,7 +120,7 @@ function bandState(
   lower: number | null,
   previousUpper: number | null,
   previousLower: number | null,
-): { ordered: boolean; inside: boolean; up: boolean; down: boolean; flat: boolean; type: number } {
+): { ordered: boolean; inside: boolean; up: boolean; down: boolean; flat: boolean } {
   const ready = upper !== null && lower !== null && close !== null;
   const ordered = ready && upper > lower;
   const inside = ready && close < upper && close > lower;
@@ -124,14 +128,19 @@ function bandState(
   const up = comparable && upper > previousUpper && lower > previousLower;
   const down = comparable && upper < previousUpper && lower < previousLower;
   const flat = ready && !up && !down;
-  return { ordered, inside, up, down, flat, type: up ? 1 : down ? -1 : 0 };
+  return { ordered, inside, up, down, flat };
 }
 
-function direction(value: number | undefined): TrendDirection | null {
-  if (value === 1) return "up";
-  if (value === -1) return "down";
-  if (value === 0) return "flat";
-  return null;
+function compareBands(
+  shortA: number | null | undefined,
+  shortB: number | null | undefined,
+  longA: number | null | undefined,
+  longB: number | null | undefined,
+): TrendDirection | null {
+  if (shortA == null || shortB == null || longA == null || longB == null) return null;
+  if (Math.min(shortA, shortB) > Math.max(longA, longB)) return "up";
+  if (Math.max(shortA, shortB) < Math.min(longA, longB)) return "down";
+  return "flat";
 }
 
 function ema(values: number[], period: number): Array<number | null> {

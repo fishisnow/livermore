@@ -1433,12 +1433,17 @@ async function openPortfolio() {
 function renderTrend(position) {
   const trend = state.trends?.[position.symbol];
   if (!state.trends) return `<span class="trend-pending">读取中</span>`;
-  if (!trend || trend.error || (!trend.short && !trend.long)) return "—";
-  return `<span class="trend-pair"><span class="trend-short-${trend.short}">短${trendLabel(trend.short)}</span><span class="trend-long-${trend.long}">长${trendLabel(trend.long)}</span></span>`;
+  if (!trend?.direction || trend.error) return "—";
+  const labels = trendLabels(trend);
+  const ma5Label = ({ above: "站上5日", below: "5日压制" })[trend.ma5Position];
+  if (ma5Label) labels.push(ma5Label);
+  return `<span class="trend-${trend.direction}">${labels.join("<br>")}</span>`;
 }
 
-function trendLabel(value) {
-  return ({ up: "上升", down: "下降", flat: "横盘" })[value] || "—";
+function trendLabels({ direction, reversal }) {
+  const label = ({ up: "上升", down: "下降", flat: "横盘" })[direction] || "—";
+  const reversalLabel = ({ strong: "强势反转", weak: "弱势反转" })[reversal];
+  return reversalLabel ? [label, reversalLabel] : [label];
 }
 
 async function loadHoldingTrends() {
@@ -1471,7 +1476,7 @@ async function openHoldingTrend(symbol, name, ktype = "1d") {
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     if (state.trendSymbol !== symbol || state.trendKtype !== ktype) return;
     state.trendModel = result;
-    document.querySelector("#trend-status").textContent = `短期${trendLabel(result.short)} · 长期${trendLabel(result.long)}`;
+    document.querySelector("#trend-status").textContent = trendLabels(result).join(" · ");
     paintTrendChart();
   } catch (error) {
     state.trendModel = null;

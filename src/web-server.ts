@@ -9,7 +9,7 @@ import { createLivermoreChatAgent } from "./chat/livermore-chat-agent.js";
 import { loadConfig } from "./config.js";
 import { observeAgent, Telemetry } from "./observability/telemetry.js";
 import { databasePath, nodeEntrypointArguments, projectRoot, reportsDirectory, resourceRoot, webDirectory } from "./project-paths.js";
-import { isTrendKtype, loadHoldingTrend, loadHoldingTrends } from "./market/portfolio-trend.js";
+import { holdingTrendReversal, isTrendKtype, loadHoldingTrend, loadHoldingTrends } from "./market/portfolio-trend.js";
 import { InvestmentDatabase } from "./storage/database.js";
 import type { PortfolioPositionInput, TaskName } from "./storage/database.js";
 import { createReportTool } from "./tools/report-tool.js";
@@ -177,7 +177,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   } else if (request.method === "GET" && url.pathname === "/api/charts/rise-fall") {
     sendJson(response, 200, await queryAshareRiseFall({ config }));
   } else if (request.method === "GET" && url.pathname === "/api/portfolio/trends") {
-    const trends = await loadHoldingTrends(config, database.listPositions().map((position) => position.symbol));
+    const trends = await loadHoldingTrends(config, database.listPositions());
     sendJson(response, 200, { trends });
   } else if (request.method === "GET" && url.pathname === "/api/portfolio/trend") {
     const symbol = url.searchParams.get("symbol")?.trim() ?? "";
@@ -185,7 +185,9 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     if (!symbol) return sendJson(response, 400, { error: "缺少股票代码。" });
     if (!isTrendKtype(ktype)) return sendJson(response, 400, { error: "不支持的 K 线周期。" });
     try {
-      sendJson(response, 200, await loadHoldingTrend(config, symbol, ktype));
+      const chart = await loadHoldingTrend(config, symbol, ktype);
+      const position = database.listPositions().find((item) => item.symbol === symbol);
+      sendJson(response, 200, { ...chart, reversal: holdingTrendReversal(chart, position) });
     } catch (error) {
       sendJson(response, 502, { error: error instanceof Error ? error.message : String(error) });
     }
