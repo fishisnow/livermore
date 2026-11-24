@@ -12,6 +12,10 @@ export type TrendDirection = "up" | "down" | "flat";
 export type Ma5Position = "above" | "below";
 
 export interface TrendChartModel {
+  intraday?: boolean;
+  linePrices?: number[];
+  vwap?: Array<number | null>;
+  prevClose?: number | null;
   dates: string[];
   candles: Array<[number, number, number, number]>;
   volumes: number[];
@@ -39,6 +43,61 @@ export interface TrendChartModel {
   longStickFlat: Array<[string, number, number]>;
   direction: TrendDirection | null;
   ma5Position: Ma5Position | null;
+}
+
+export interface IntradayPoint {
+  time: string;
+  price: number;
+  avgPrice: number | null;
+  volume: number;
+  turnover: number;
+}
+
+export function buildIntradayTrendChart(points: IntradayPoint[]): TrendChartModel {
+  if (points.length === 0) throw new Error("暂无分时数据。");
+  const dates = points.map((point) => point.time);
+  const linePrices = points.map((point) => point.price);
+  const vwap = points.map((point) => point.avgPrice);
+  const candles = points.map((point) => [point.price, point.price, point.price, point.price] as [number, number, number, number]);
+  const volumes = points.map((point) => point.volume);
+  const turnovers = points.map((point) => point.turnover);
+  const emptyLine = () => new Array<number | null>(points.length).fill(null);
+  const first = points[0]!.price;
+  const last = points.at(-1)!.price;
+  const direction: TrendDirection | null = last > first ? "up" : last < first ? "down" : "flat";
+  return {
+    intraday: true,
+    linePrices,
+    vwap,
+    prevClose: vwap.find((value) => value != null) ?? first,
+    dates,
+    candles,
+    volumes,
+    turnovers,
+    ma5: emptyLine(),
+    ma10: emptyLine(),
+    ma20: emptyLine(),
+    shortA: emptyLine(),
+    shortB: emptyLine(),
+    longA: emptyLine(),
+    longB: emptyLine(),
+    shortAUp: emptyLine(),
+    shortADown: emptyLine(),
+    shortBUp: emptyLine(),
+    shortBDown: emptyLine(),
+    longAUp: emptyLine(),
+    longADown: emptyLine(),
+    longBUp: emptyLine(),
+    longBDown: emptyLine(),
+    shortStickUp: [],
+    shortStickDown: [],
+    shortStickFlat: [],
+    longStickUp: [],
+    longStickDown: [],
+    longStickFlat: [],
+    direction,
+    ma5Position: null,
+  };
 }
 
 export function buildTrendChart(bars: TrendBar[]): TrendChartModel {

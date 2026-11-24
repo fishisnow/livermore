@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { holdingTrendReversal } from "../src/market/portfolio-trend.js";
-import { buildTrendChart, type TrendBar } from "../src/market/trend-bands.js";
+import { buildIntradayTrendChart, buildTrendChart, type TrendBar } from "../src/market/trend-bands.js";
 
 function bars(step: number): TrendBar[] {
   return Array.from({ length: 120 }, (_, index) => {
@@ -60,6 +60,16 @@ describe("trend bands", () => {
 
   it("returns no direction without bars", () => {
     expect(buildTrendChart([]).direction).toBeNull();
+  });
+
+  it("builds intraday line model from rt points", () => {
+    const model = buildIntradayTrendChart([
+      { time: "2026-11-23 09:31:00", price: 10, avgPrice: 10, volume: 100, turnover: 1000 },
+      { time: "2026-11-23 09:32:00", price: 10.2, avgPrice: 10.1, volume: 120, turnover: 1200 },
+    ]);
+    expect(model.intraday).toBe(true);
+    expect(model.linePrices).toEqual([10, 10.2]);
+    expect(model.direction).toBe("up");
   });
 });
 

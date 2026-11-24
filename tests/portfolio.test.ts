@@ -173,6 +173,13 @@ describe("portfolio ledger", () => {
       riskSummary: "持仓亏损达到风险线",
       lastCheckedAt: "2026-07-23T02:30:00.000Z",
     });
+    database.updatePositionLiveQuote(position.id, 11.4, 2.5);
+    expect(database.getPosition(position.id)).toMatchObject({
+      latestPrice: 11.4,
+      dayChangePct: 2.5,
+      pnlPct: -5,
+      severity: "critical",
+    });
     database.close();
   });
 });

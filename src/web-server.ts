@@ -27,6 +27,8 @@ import { PortfolioQuoteWatch } from "./market/portfolio-quote-watch.js";
 import { MessageCenter } from "./notifications/message-center.js";
 import { refreshMcpServerTools } from "./mcp/agent-tools.js";
 import { createMcpServer, deleteMcpServer, McpConfigError, toPublicMcp, updateMcpServer, resolveBriefingMcp } from "./mcp/registry.js";
+import { handleWatchApi } from "./watch/http.js";
+import { WatchError, type SignalNotice } from "./watch/service.js";
 
 const config = loadConfig();
 const database = new InvestmentDatabase(databasePath);
@@ -41,7 +43,7 @@ const server = createServer(async (request, response) => {
       sendSse(response, "error", { message: error instanceof Error ? error.message : String(error) });
       response.end();
     } else {
-      sendJson(response, error instanceof TaskSettingsError || error instanceof ChatSessionError || error instanceof McpConfigError ? error.statusCode : 500, { error: error instanceof Error ? error.message : String(error) });
+      sendJson(response, error instanceof TaskSettingsError || error instanceof ChatSessionError || error instanceof McpConfigError || error instanceof WatchError ? error.statusCode : 500, { error: error instanceof Error ? error.message : String(error) });
     }
   }
 });
@@ -83,6 +85,12 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     const origin = new URL(request.headers.origin);
     if (!["127.0.0.1", "localhost"].includes(origin.hostname) || origin.port !== String(config.webPort)) return sendJson(response, 403, { error: "Origin not allowed." });
   }
+  if (await handleWatchApi(request, response, url, {
+    config,
+    database,
+    readJson: readJsonBody,
+    notify: (notice: SignalNotice) => publishWatchNotice(notice),
+  })) return;
   if (request.method === "GET" && url.pathname === "/api/health") {
     sendJson(response, 200, {
       ok: true,
@@ -494,6 +502,16 @@ function sendSse(response: ServerResponse, event: string, data: unknown): void {
 function sendJson(response: ServerResponse, status: number, data: unknown): void {
   response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
   response.end(JSON.stringify(data));
+}
+
+async function publishWatchNotice(notice: SignalNotice): Promise<void> {
+  const sources = notice.sources.map((source) => `- ${source.title}${source.publishedAt ? `（${source.publishedAt.slice(0, 10)}）` : ""} ${source.url}`).join("\n");
+  await new MessageCenter(config, database).publish({
+    runId: null,
+    severity: "warning",
+    title: `雷达 · ${notice.question}`,
+    body: `${notice.summary}\n\n此前：${notice.previousState}\n新增：${notice.newEvidence}${sources ? `\n\n来源：\n${sources}` : ""}`,
+  });
 }
 
 function contentType(filename: string): string {

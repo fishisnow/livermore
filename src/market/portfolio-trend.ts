@@ -1,11 +1,11 @@
 import type { AppConfig } from "../config.js";
 import type { PortfolioPosition } from "../storage/database.js";
-import { queryFutuHistoryKline } from "./futu-client.js";
+import { queryFutuHistoryKline, queryFutuRtData } from "./futu-client.js";
 import { toFutuSecurityCode } from "./normalized-market.js";
-import { buildTrendChart, type Ma5Position, type TrendChartModel, type TrendDirection } from "./trend-bands.js";
+import { buildIntradayTrendChart, buildTrendChart, type Ma5Position, type TrendChartModel, type TrendDirection } from "./trend-bands.js";
 import { queryUsIndexHistory } from "./us-index-history.js";
 
-export const TREND_KTYPES = ["1d", "1w", "1M", "1Q", "1Y"] as const;
+export const TREND_KTYPES = ["rt", "1d", "1w", "1M", "1Q", "1Y"] as const;
 export type TrendKtype = (typeof TREND_KTYPES)[number];
 
 type HoldingQuote = Pick<PortfolioPosition, "latestPrice" | "lastCheckedAt">;
@@ -16,6 +16,8 @@ export interface HoldingTrendSummary {
   direction: TrendDirection | null;
   reversal: TrendReversal | null;
   ma5Position: Ma5Position | null;
+  intraday?: IntradaySpark | null;
+  intradayNote?: string | null;
   error?: string;
 }
 
@@ -54,6 +56,29 @@ export async function loadIndexTrend(config: AppConfig, symbol: string, ktype: T
   return loadTrendChart(config, symbol, symbol, ktype);
 }
 
+export interface IntradaySpark {
+  prices: number[];
+  vwap: Array<number | null>;
+  prevClose?: number | null;
+}
+
+export function downsampleIntradaySpark(
+  prices: number[],
+  vwap: Array<number | null>,
+  maxPoints = 72,
+): IntradaySpark {
+  if (prices.length <= maxPoints) return { prices, vwap };
+  const step = prices.length / maxPoints;
+  const sampledPrices: number[] = [];
+  const sampledVwap: Array<number | null> = [];
+  for (let index = 0; index < maxPoints; index += 1) {
+    const source = Math.min(prices.length - 1, Math.floor(index * step));
+    sampledPrices.push(prices[source]!);
+    sampledVwap.push(vwap[source] ?? null);
+  }
+  return { prices: sampledPrices, vwap: sampledVwap };
+}
+
 export async function loadMarketIndices(config: AppConfig) {
   return mapPool([...MARKET_INDICES], 3, async (index) => {
     try {
@@ -61,6 +86,7 @@ export async function loadMarketIndices(config: AppConfig) {
       const latest = chart.candles.at(-1)?.[1];
       if (latest === undefined) throw new Error("暂无日 K 线数据。");
       const previous = chart.candles.at(-2)?.[1];
+      const { intraday, intradayNote } = await loadIntradaySparkForSymbol(config, index.symbol, index.symbol, index.symbol.startsWith("US.."));
       return {
         ...index,
         date: chart.dates.at(-1),
@@ -69,6 +95,8 @@ export async function loadMarketIndices(config: AppConfig) {
         direction: chart.direction,
         reversal: holdingTrendReversal(chart),
         ma5Position: chart.ma5Position,
+        intraday,
+        intradayNote,
       };
     } catch (error) {
       return { ...index, error: error instanceof Error ? error.message : String(error) };
@@ -80,8 +108,16 @@ async function loadTrendChart(config: AppConfig, symbol: string, futuCode: strin
   const key = `${futuCode}:${ktype}`;
   const cached = cache.get(key);
   if (!refresh && cached && Date.now() - cached.at < CACHE_TTL_MS) return { ...cached.chart, symbol };
-  const range = trendRange(ktype);
   const yahooSymbol = futuCode === "US..IXIC" ? "^IXIC" : futuCode === "US..SPX" ? "^GSPC" : null;
+  if (ktype === "rt") {
+    if (yahooSymbol) throw new Error("该指数暂无分时图，请查看日 K。");
+    const ttl = 60_000;
+    if (!refresh && cached && Date.now() - cached.at < ttl) return { ...cached.chart, symbol };
+    const chart: HoldingTrendChart = { symbol, futuCode, ktype, ...buildIntradayTrendChart(await queryFutuRtData(config, futuCode)) };
+    cache.set(key, { at: Date.now(), chart });
+    return chart;
+  }
+  const range = trendRange(ktype);
   const bars = yahooSymbol
     ? await queryUsIndexHistory(yahooSymbol, ktype, range.start, range.end)
     : await queryFutuHistoryKline(config, futuCode, ktype, range.start, range.end);
@@ -95,22 +131,52 @@ export async function loadHoldingTrends(config: AppConfig, positions: Array<Hold
     const { symbol } = position;
     try {
       const chart = await loadHoldingTrend(config, symbol, "1d");
+      const spark = await loadIntradaySparkForSymbol(config, symbol, chart.futuCode, false);
       return {
         symbol,
         direction: chart.direction,
         reversal: holdingTrendReversal(chart, position),
         ma5Position: chart.ma5Position,
+        intraday: spark.intraday,
+        intradayNote: spark.intradayNote,
       };
     } catch (error) {
+      const futuCode = toFutuSecurityCode(symbol);
+      const spark = futuCode
+        ? await loadIntradaySparkForSymbol(config, symbol, futuCode, false)
+        : { intraday: null, intradayNote: "暂无分时" as const };
       return {
         symbol,
         direction: null,
         reversal: null,
         ma5Position: null,
+        intraday: spark.intraday,
+        intradayNote: spark.intradayNote,
         error: error instanceof Error ? error.message : String(error),
       };
     }
   });
+}
+
+async function loadIntradaySparkForSymbol(
+  config: AppConfig,
+  symbol: string,
+  futuCode: string,
+  usIndex: boolean,
+): Promise<{ intraday: IntradaySpark | null; intradayNote: string | null }> {
+  if (usIndex) return { intraday: null, intradayNote: "暂无分时" };
+  try {
+    const rt = await loadTrendChart(config, symbol, futuCode, "rt", false);
+    const prices = rt.linePrices ?? [];
+    const vwap = rt.vwap ?? [];
+    if (prices.length < 2) return { intraday: null, intradayNote: "暂无分时" };
+    return {
+      intraday: { ...downsampleIntradaySpark(prices, vwap), prevClose: rt.prevClose ?? null },
+      intradayNote: null,
+    };
+  } catch (error) {
+    return { intraday: null, intradayNote: error instanceof Error ? error.message : "暂无分时" };
+  }
 }
 
 export function holdingTrendReversal(chart: TrendChartModel, quote?: HoldingQuote): TrendReversal | null {

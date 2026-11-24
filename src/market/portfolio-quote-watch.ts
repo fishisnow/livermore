@@ -31,8 +31,16 @@ interface WatchEvent {
   type?: string;
   code?: string;
   lastPrice?: number;
+  prevClose?: number;
+  dayChangePct?: number;
   message?: string;
   codes?: string[];
+}
+
+interface LiveQuoteCache {
+  price: number;
+  dayChangePct: number | null;
+  writtenAt: number;
 }
 
 /** 本机只让一个 Livermore 进程占用富途订阅。Mac 应用优先于开发服务。 */
@@ -65,6 +73,7 @@ export class PortfolioQuoteWatch {
   private lastWarning = "";
   private lastWarningAt = 0;
   private standbyLogged = false;
+  private liveQuotes = new Map<string, LiveQuoteCache>();
 
   constructor(
     private readonly config: AppConfig,
@@ -187,9 +196,13 @@ export class PortfolioQuoteWatch {
       return;
     }
     if (event.type !== "quote" || !event.code || typeof event.lastPrice !== "number") return;
+    const price = event.lastPrice;
+    if (!Number.isFinite(price) || price <= 0) return;
+    const dayChangePct = resolveDayChangePct(price, event.dayChangePct, event.prevClose);
+    this.persistLiveQuote(event.code, price, dayChangePct);
     const watched = this.positions.get(event.code) ?? [];
     for (const item of watched) {
-      const decision = evaluateAtrStopAlert(item, event.lastPrice);
+      const decision = evaluateAtrStopAlert(item, price);
       if (!decision) continue;
       if (decision.action === "rearm") {
         this.database.setAtrStopAlertFired(item.id, null);
@@ -199,10 +212,24 @@ export class PortfolioQuoteWatch {
       const firedAt = new Date().toISOString();
       this.database.setAtrStopAlertFired(item.id, firedAt);
       item.firedAt = firedAt;
-      const price = event.lastPrice;
       this.queue = this.queue
         .then(() => this.publishFire(item, price, decision.stop, firedAt))
         .catch((error) => this.warn(error instanceof Error ? error.message : String(error)));
+    }
+  }
+
+  private persistLiveQuote(code: string, price: number, dayChangePct: number | null): void {
+    const watched = this.positions.get(code);
+    if (!watched || watched.length === 0) return;
+    const previous = this.liveQuotes.get(code);
+    const now = Date.now();
+    const unchanged = previous
+      && Math.abs(previous.price - price) < 0.000_000_1
+      && previous.dayChangePct === dayChangePct;
+    if (unchanged && now - previous.writtenAt < 1_000) return;
+    this.liveQuotes.set(code, { price, dayChangePct, writtenAt: now });
+    for (const item of watched) {
+      this.database.updatePositionLiveQuote(item.id, price, dayChangePct);
     }
   }
 
@@ -261,6 +288,20 @@ function processAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+function resolveDayChangePct(
+  price: number,
+  dayChangePct: number | undefined,
+  prevClose: number | undefined,
+): number | null {
+  if (typeof dayChangePct === "number" && Number.isFinite(dayChangePct)) {
+    return Math.round((dayChangePct + Number.EPSILON) * 10_000) / 10_000;
+  }
+  if (typeof prevClose === "number" && Number.isFinite(prevClose) && prevClose > 0) {
+    return Math.round((((price - prevClose) / prevClose) * 100 + Number.EPSILON) * 10_000) / 10_000;
+  }
+  return null;
 }
 
 function formatPrice(value: number): string {

@@ -3,7 +3,8 @@
 持续订阅报价推送。
 
 从 stdin 读取一行 JSON：{"codes": ["HK.00700", "SH.600519"]}
-每收到一次报价，向 stdout 写一行 JSON：{"type":"quote","code":"HK.00700","lastPrice":417.4}
+每收到一次报价，向 stdout 写一行 JSON：
+{"type":"quote","code":"HK.00700","lastPrice":417.4,"prevClose":410.0,"dayChangePct":1.71}
 
 连接保持打开。代码列表变化时只调整订阅；取消订阅至少等 60 秒，满足富途接口限制。
 OpenD 断开后会重试，不退出。
@@ -44,7 +45,15 @@ def emit_quotes(data):
             continue
         if not code or not math.isfinite(price) or price <= 0:
             continue
-        emit({"type": "quote", "code": str(code), "lastPrice": price})
+        payload = {"type": "quote", "code": str(code), "lastPrice": price}
+        try:
+            prev_close = float(getter("prev_close_price"))
+        except (TypeError, ValueError):
+            prev_close = None
+        if prev_close is not None and math.isfinite(prev_close) and prev_close > 0:
+            payload["prevClose"] = prev_close
+            payload["dayChangePct"] = round(((price - prev_close) / prev_close) * 100, 4)
+        emit(payload)
 
 
 class QuoteHandler:

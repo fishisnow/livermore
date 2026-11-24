@@ -1,4 +1,8 @@
 import { disposeTrendChart, renderTrendChart, resizeTrendChart, trendActivity } from "./trend-chart.js";
+import { renderIntradaySpark } from "./intraday-spark.js";
+import { bindRadar, openRadar, prefetchRadar } from "./radar.js";
+
+bindRadar((message) => showToast(message));
 
 const state = {
   sessionId: localStorage.getItem("livermore.sessionId") || "",
@@ -19,6 +23,8 @@ const state = {
   chats: [],
   chatQuery: "",
   switchingChat: false,
+  portfolioPoll: null,
+  portfolioSort: { key: null, direction: "desc" },
 };
 
 const elements = {
@@ -116,6 +122,7 @@ const views = {
   tasks: ["定时任务", "选择任务后，只显示该任务的运行记录"],
   charts: ["", ""],
   capabilities: ["研究能力", "已安装的 Skills、MCP 与数据连接"],
+  radar: ["雷达", "确认后才跟踪。没有变化就不打扰。"],
 };
 const chartState = { fearGreed: null, fearGreedRange: 366, equityBond: null, equityIndex: "881001.WI", equityPe: "fed", equityRange: 366 * 5, nationalTeam: null, nationalRange: 21, riseFall: null, expandedChart: null };
 const EQUITY_BOND_CHOICES = [["881001.WI", "万得全A"], ["000300.SH", "沪深300"], ["000905.SH", "中证500"], ["000016.SH", "上证50"]];
@@ -151,9 +158,14 @@ async function setView(view, { refresh = false } = {}) {
   if (view === "portfolio") {
     if (!document.querySelector("#position-purchased-at").value) document.querySelector("#position-purchased-at").value = toDateTimeLocal(new Date());
     await loadPortfolio();
-  } else if (view === "indices") await loadMarketIndices();
+    startPortfolioPoll();
+  } else {
+    stopPortfolioPoll();
+  }
+  if (view === "indices") await loadMarketIndices();
   else if (view === "capabilities") await loadCapabilities(refresh);
   else if (view === "charts") await loadCharts();
+  else if (view === "radar") await openRadar();
   if (view !== "charts" && chartState.expandedChart) {
     chartState.expandedChart = null;
     const backdrop = document.querySelector("#chart-expand-backdrop");
@@ -231,7 +243,7 @@ nativeBridge?.postMessage({ type: "notification-status" });
 document.addEventListener("keydown", (event) => {
   if (event.metaKey && !event.altKey && !event.shiftKey) {
     if (event.key.toLowerCase() === "n") { event.preventDefault(); newConversation(); }
-    const view = ["chat", "portfolio", "tasks", "capabilities"][Number(event.key) - 1];
+    const view = ["chat", "portfolio", "tasks", "capabilities", "radar"][Number(event.key) - 1];
     if (view) { event.preventDefault(); setView(view); }
   }
   if (event.key === "Escape" && historyMenuId) { event.preventDefault(); closeHistoryMenu(); return; }
@@ -343,6 +355,19 @@ document.querySelector("#close-portfolio-dialog").addEventListener("click", () =
 document.querySelector("#position-form").addEventListener("submit", savePosition);
 document.querySelector("#cancel-position-edit").addEventListener("click", resetPositionForm);
 document.querySelector("#run-portfolio-check").addEventListener("click", runPortfolioCheck);
+elements.portfolioRows.closest("table")?.addEventListener("click", (event) => {
+  const button = event.target.closest(".portfolio-sort");
+  if (!button) return;
+  const key = button.dataset.sortKey;
+  if (!key) return;
+  if (state.portfolioSort.key === key) {
+    state.portfolioSort.direction = state.portfolioSort.direction === "desc" ? "asc" : "desc";
+  } else {
+    state.portfolioSort.key = key;
+    state.portfolioSort.direction = "desc";
+  }
+  renderPortfolio(state.positions);
+});
 document.querySelector("#refresh-indices").addEventListener("click", loadMarketIndices);
 elements.indicesRows.addEventListener("click", (event) => {
   const button = event.target.closest("[data-trend-symbol]");
@@ -375,6 +400,7 @@ elements.mcpLedger.addEventListener("click", onMcpClick);
 
 loadDashboard();
 loadPortfolio();
+prefetchRadar();
 restoreConversation();
 setInterval(loadDashboard, 12_000);
 
@@ -1445,6 +1471,14 @@ async function openPortfolio() {
   await setView("portfolio");
 }
 
+function renderIntradayCell(symbol) {
+  const trend = state.trends?.[symbol];
+  if (!trend) return `<span class="spark-pending" aria-hidden="true">…</span>`;
+  if (trend.intraday) return renderIntradaySpark(trend.intraday, { width: 88, height: 26 });
+  const note = trend.intradayNote || trend.error || "暂无分时";
+  return `<span class="spark-empty" title="${escapeHtml(note)}">—</span>`;
+}
+
 function renderTrend(position) {
   if (!state.trends) return `<span class="trend-pending">读取中</span>`;
   return renderTrendCell(state.trends[position.symbol]);
@@ -1474,7 +1508,7 @@ async function loadMarketIndices() {
   const status = document.querySelector("#indices-load-status");
   button.disabled = true;
   status.hidden = false;
-  status.textContent = "正在读取指数日 K 线…";
+  status.textContent = "正在读取指数日 K 与当日分时…";
   try {
     const response = await fetch("/api/indices");
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1489,6 +1523,7 @@ async function loadMarketIndices() {
         </td>
         <td class="num">${index.error ? `<span title="${escapeHtml(index.error)}">暂不可用</span>` : formatPrice(index.latest, 2)}</td>
         <td class="num ${changeClass(index.dayChangePct)}">${formatChange(index.dayChangePct)}</td>
+        <td class="col-intraday">${index.error ? `<span class="spark-empty" title="${escapeHtml(index.error)}">—</span>` : index.intraday ? renderIntradaySpark(index.intraday) : `<span class="spark-empty" title="${escapeHtml(index.intradayNote || "暂无分时")}">—</span>`}</td>
         <td>${renderTrendCell(index)}</td>
       </tr>
     `).join("");
@@ -1526,8 +1561,15 @@ async function openTrend(symbol, name, ktype = "1d", source = "portfolio") {
   document.querySelectorAll("#trend-periods [data-ktype]").forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.ktype === ktype));
   });
+  const intraday = ktype === "rt";
+  for (const [id, enabled] of [["#trend-toggle-ma", !intraday], ["#trend-toggle-bands", !intraday]]) {
+    const button = document.querySelector(id);
+    if (!button) continue;
+    button.disabled = !enabled;
+    button.setAttribute("aria-disabled", String(!enabled));
+  }
   if (!dialog.open) dialog.showModal();
-  document.querySelector("#trend-status").textContent = "正在读取 K 线…";
+  document.querySelector("#trend-status").textContent = intraday ? "正在读取分时…" : "正在读取 K 线…";
   try {
     const query = new URLSearchParams({ symbol, ktype });
     const response = await fetch(`/api/${source}/trend?${query}`, { signal: request.signal });
@@ -1540,7 +1582,9 @@ async function openTrend(symbol, name, ktype = "1d", source = "portfolio") {
     const activity = trendActivity(result, turnoverOnly);
     activityButton.textContent = activity?.label ?? (turnoverOnly ? "暂无成交额" : "暂无成交量");
     activityButton.disabled = !activity;
-    document.querySelector("#trend-status").textContent = trendLabels(result).join(" · ");
+    document.querySelector("#trend-status").textContent = result.intraday
+      ? `分时 · ${result.dates.length} 个点`
+      : trendLabels(result).join(" · ");
     paintTrendChart();
   } catch (error) {
     if (request.signal.aborted) return;
@@ -1554,6 +1598,7 @@ function paintTrendChart() {
   const root = document.documentElement;
   renderTrendChart(document.querySelector("#trend-chart"), state.trendModel, {
     ...state.trendOptions,
+    intraday: state.trendModel.intraday === true,
     turnoverOnly: state.trendSource === "indices",
     moyu: root.dataset.moyu === "on",
     dark: root.dataset.theme === "dark",
@@ -1575,7 +1620,21 @@ function clearTrendChart() {
   disposeTrendChart();
 }
 
-async function loadPortfolio() {
+function startPortfolioPoll() {
+  stopPortfolioPoll();
+  state.portfolioPoll = setInterval(() => {
+    if (state.view !== "portfolio" || document.hidden) return;
+    void loadPortfolio({ soft: true });
+  }, 2_000);
+}
+
+function stopPortfolioPoll() {
+  if (!state.portfolioPoll) return;
+  clearInterval(state.portfolioPoll);
+  state.portfolioPoll = null;
+}
+
+async function loadPortfolio({ soft = false } = {}) {
   try {
     const response = await fetch("/api/portfolio");
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1583,14 +1642,72 @@ async function loadPortfolio() {
     state.positions = data.positions;
     const multiplier = document.querySelector("#atr-stop-multiplier");
     if (document.activeElement !== multiplier) multiplier.value = String(data.atrStopMultiplier ?? 2);
-    renderPortfolio(data.positions);
-    void loadHoldingTrends();
+    if (soft) renderPortfolioQuotes(data.positions);
+    else {
+      renderPortfolio(data.positions);
+      void loadHoldingTrends();
+    }
   } catch (error) {
-    showToast(`持仓读取失败：${error.message}`);
+    if (!soft) showToast(`持仓读取失败：${error.message}`);
   }
 }
 
+function renderPortfolioQuotes(positions) {
+  const byId = new Map(positions.map((item) => [item.id, item]));
+  elements.portfolioRows.querySelectorAll("tr[data-position-id]").forEach((row) => {
+    const position = byId.get(row.dataset.positionId);
+    if (!position) return;
+    const price = row.querySelector('[data-label="最新价"]');
+    const day = row.querySelector('[data-label="涨跌幅"]');
+    const pnl = row.querySelector('[data-label="持仓盈亏"]');
+    if (price) price.textContent = position.latestPrice == null ? "—" : formatPrice(position.latestPrice);
+    if (day) {
+      day.textContent = formatChange(position.dayChangePct);
+      day.className = `num ${changeClass(position.dayChangePct)}`;
+    }
+    if (pnl) {
+      pnl.textContent = formatChange(position.pnlPct);
+      pnl.className = `num ${changeClass(position.pnlPct)}`;
+    }
+  });
+  if (elements.portfolioRows.querySelectorAll("tr[data-position-id]").length !== positions.length) {
+    renderPortfolio(positions);
+  }
+}
+
+function sortPortfolioPositions(positions) {
+  const { key, direction } = state.portfolioSort;
+  if (!key) return [...positions];
+  const factor = direction === "asc" ? 1 : -1;
+  return [...positions].sort((left, right) => {
+    const cmp = compareSortMetric(left[key], right[key]);
+    if (cmp !== 0) return cmp * factor;
+    return left.symbol.localeCompare(right.symbol, "zh-CN");
+  });
+}
+
+function compareSortMetric(left, right) {
+  const a = left == null || left === "" ? null : Number(left);
+  const b = right == null || right === "" ? null : Number(right);
+  const aMissing = a === null || !Number.isFinite(a);
+  const bMissing = b === null || !Number.isFinite(b);
+  if (aMissing && bMissing) return 0;
+  if (aMissing) return 1;
+  if (bMissing) return -1;
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+function updatePortfolioSortHeaders() {
+  document.querySelectorAll("#portfolio-dialog .portfolio-sort").forEach((button) => {
+    const active = button.dataset.sortKey === state.portfolioSort.key;
+    button.setAttribute("aria-sort", active ? (state.portfolioSort.direction === "asc" ? "ascending" : "descending") : "none");
+  });
+}
+
 function renderPortfolio(positions) {
+  positions = sortPortfolioPositions(positions);
+  updatePortfolioSortHeaders();
   document.querySelector("#nav-position-count").textContent = String(positions.length);
   document.querySelector("[data-view-target='portfolio']").title = `我的持仓 · ${positions.length}`;
   const warningCount = positions.filter((item) => item.severity === "warning").length;
@@ -1604,7 +1721,7 @@ function renderPortfolio(positions) {
     : "尚未执行风险巡检";
   elements.portfolioEmpty.hidden = positions.length > 0;
   elements.portfolioRows.innerHTML = positions.map((position) => `
-    <tr>
+    <tr data-position-id="${escapeHtml(position.id)}">
       <td data-label="标的">
         <button type="button" class="trend-link" data-trend-symbol="${escapeHtml(position.symbol)}" data-trend-name="${escapeHtml(position.latestName || position.symbol)}">
           <strong>${escapeHtml(position.latestName || position.symbol)}</strong>
@@ -1614,12 +1731,13 @@ function renderPortfolio(positions) {
       <td class="num" data-label="数量">${formatQuantity(position.quantity)}</td>
       <td class="num" data-label="成本">${formatPrice(position.costBasis)}</td>
       <td class="num" data-label="最新价">${position.latestPrice == null ? "—" : formatPrice(position.latestPrice)}</td>
+      <td data-label="涨跌幅" class="num ${changeClass(position.dayChangePct)}">${formatChange(position.dayChangePct)}</td>
       <td class="num ${changeClass(position.mainNetInflow)}" data-label="主力净流入">${renderMainFlow(position)}</td>
       <td class="num" data-label="ATR止损">${renderAtrStop(position)}</td>
       <td data-label="价格预警">${renderPriceAlerts(position)}</td>
       <td data-label="持仓盈亏" class="num ${changeClass(position.pnlPct)}">${formatChange(position.pnlPct)}</td>
-      <td data-label="当日" class="num ${changeClass(position.dayChangePct)}">${formatChange(position.dayChangePct)}</td>
-      <td data-label="趋势">${renderTrend(position)}</td>
+      <td data-label="分时" class="col-intraday">${renderIntradayCell(position.symbol)}</td>
+      <td data-label="趋势" class="col-trend">${renderTrend(position)}</td>
       <td data-label="风险状态">
         <span class="risk-badge ${escapeHtml(position.severity || "unchecked")}">${riskLabel(position.severity)}</span>
         <small class="risk-summary">${escapeHtml(position.riskSummary || "等待首次巡检")}</small>
@@ -2080,6 +2198,8 @@ async function sendMessage(rawMessage, options = {}) {
         } else if (event.type === "delta") {
           accumulated += event.data.text;
           assistantBody.innerHTML = renderReportMarkdown(accumulated);
+          const assistantArticle = assistantBody.closest(".message.assistant");
+          if (assistantArticle) assistantArticle._sourceText = accumulated;
           scrollMessages();
         } else if (event.type === "tool_start") {
           elements.toolActivity.hidden = false;
@@ -2092,7 +2212,12 @@ async function sendMessage(rawMessage, options = {}) {
       }
       if (done) break;
     }
-    if (!accumulated) assistantBody.textContent = "本次没有生成文本回答。";
+    if (!accumulated) {
+      assistantBody.textContent = "本次没有生成文本回答。";
+    } else {
+      const assistantArticle = assistantBody.closest(".message.assistant");
+      if (assistantArticle) assistantArticle._sourceText = accumulated;
+    }
   } catch (error) {
     assistantBody.innerHTML = `<p>对话没有完成：${escapeHtml(error.message)}</p>`;
   } finally {
@@ -2153,13 +2278,19 @@ function appendMessage(role, text, options = {}) {
   body.className = "message-body";
   body.innerHTML = renderReportMarkdown(text);
   article.append(label, body);
+  const source = options.source ?? text;
+  if (source) article._sourceText = source;
   if (role === "user") {
     const userIndex = Number.isInteger(options.userIndex) ? options.userIndex : elements.messages.querySelectorAll(".message.user").length;
     article.dataset.userIndex = String(userIndex);
-    article._sourceText = options.source ?? text;
     const actions = document.createElement("div");
     actions.className = "message-actions";
     actions.innerHTML = `<button class="message-edit" type="button" aria-label="修改这条输入"><svg class="icon"><use href="#i-compose"/></svg></button>`;
+    article.append(actions);
+  } else if (role === "assistant") {
+    const actions = document.createElement("div");
+    actions.className = "message-actions";
+    actions.innerHTML = `<button class="message-copy" type="button">复制</button>`;
     article.append(actions);
   }
   elements.messages.append(article);
@@ -2168,12 +2299,48 @@ function appendMessage(role, text, options = {}) {
 }
 
 elements.messages.addEventListener("click", (event) => {
+  if (event.target.closest(".message-copy")) {
+    const article = event.target.closest(".message.assistant");
+    if (article) void copyAssistantMessage(article);
+    return;
+  }
   const article = event.target.closest(".message.user");
   if (!article) return;
   if (event.target.closest(".message-edit")) startEditMessage(article);
   else if (event.target.closest(".message-edit-cancel")) cancelMessageEdit();
   else if (event.target.closest(".message-edit-submit")) sendMessage(article.querySelector(".message-editor")?.value, { replaceFrom: Number(article.dataset.userIndex) });
 });
+
+async function copyAssistantMessage(article) {
+  const text = String(article._sourceText || article.querySelector(".message-body")?.innerText || "").trim();
+  if (!text) {
+    showToast("当前没有可复制的内容");
+    return;
+  }
+  try {
+    await copyPlainText(text);
+    showToast("已复制模型回答");
+  } catch (error) {
+    showToast(`复制失败：${error.message}`);
+  }
+}
+
+async function copyPlainText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.left = "-9999px";
+  document.body.append(area);
+  area.select();
+  const ok = document.execCommand("copy");
+  area.remove();
+  if (!ok) throw new Error("浏览器不允许访问剪贴板");
+}
 elements.messages.addEventListener("keydown", (event) => {
   if (!event.target.classList?.contains("message-editor")) return;
   if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelMessageEdit(); }

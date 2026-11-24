@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { BriefingTask, SourceItem } from "../briefings/types.js";
+import { WatchStore } from "../watch/store.js";
 
 export type RunStatus = "running" | "succeeded" | "failed" | "skipped";
 export type BuiltinTaskName = BriefingTask | "portfolio-risk-check";
@@ -173,12 +174,14 @@ export interface FeishuConversation {
 
 export class InvestmentDatabase {
   private readonly db: DatabaseSync;
+  readonly watches: WatchStore;
 
   constructor(filename: string) {
     if (filename !== ":memory:") mkdirSync(path.dirname(filename), { recursive: true });
     this.db = new DatabaseSync(filename);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     this.migrate();
+    this.watches = new WatchStore(this.db);
   }
 
   close(): void {
@@ -551,6 +554,15 @@ export class InvestmentDatabase {
     this.db.prepare("UPDATE portfolio_positions SET atr_stop_fired_at = ? WHERE id = ?").run(firedAt, id);
   }
 
+  /** 富途实时报价写入持仓；列表优先展示这些字段。 */
+  updatePositionLiveQuote(id: string, currentPrice: number, dayChangePct: number | null): void {
+    this.db.prepare(`
+      UPDATE portfolio_positions
+      SET live_price = ?, live_day_change_pct = ?, live_quoted_at = ?
+      WHERE id = ?
+    `).run(currentPrice, dayChangePct, new Date().toISOString(), id);
+  }
+
   deletePosition(id: string): boolean {
     return Number(this.db.prepare("DELETE FROM portfolio_positions WHERE id = ?").run(id).changes) > 0;
   }
@@ -558,7 +570,14 @@ export class InvestmentDatabase {
   listPositions(): PortfolioPosition[] {
     return this.db.prepare(`
       SELECT p.*,
-        c.name AS latest_name, c.current_price AS latest_price, c.pnl_pct, c.day_change_pct,
+        c.name AS latest_name,
+        CASE WHEN p.live_price IS NOT NULL THEN p.live_price ELSE c.current_price END AS latest_price,
+        CASE
+          WHEN p.live_price IS NOT NULL AND p.cost_basis > 0
+            THEN ROUND(((p.live_price - p.cost_basis) / p.cost_basis) * 100, 4)
+          ELSE c.pnl_pct
+        END AS pnl_pct,
+        CASE WHEN p.live_day_change_pct IS NOT NULL THEN p.live_day_change_pct ELSE c.day_change_pct END AS day_change_pct,
         c.main_net_inflow AS latest_main_net_inflow,
         c.severity, c.risk_summary, c.checked_at AS last_checked_at
       FROM portfolio_positions p
@@ -573,7 +592,14 @@ export class InvestmentDatabase {
   getPosition(id: string): PortfolioPosition | undefined {
     const row = this.db.prepare(`
       SELECT p.*,
-        c.name AS latest_name, c.current_price AS latest_price, c.pnl_pct, c.day_change_pct,
+        c.name AS latest_name,
+        CASE WHEN p.live_price IS NOT NULL THEN p.live_price ELSE c.current_price END AS latest_price,
+        CASE
+          WHEN p.live_price IS NOT NULL AND p.cost_basis > 0
+            THEN ROUND(((p.live_price - p.cost_basis) / p.cost_basis) * 100, 4)
+          ELSE c.pnl_pct
+        END AS pnl_pct,
+        CASE WHEN p.live_day_change_pct IS NOT NULL THEN p.live_day_change_pct ELSE c.day_change_pct END AS day_change_pct,
         c.main_net_inflow AS latest_main_net_inflow,
         c.severity, c.risk_summary, c.checked_at AS last_checked_at
       FROM portfolio_positions p
@@ -792,6 +818,7 @@ export class InvestmentDatabase {
         purchased_at TEXT NOT NULL, cost_basis REAL NOT NULL CHECK(cost_basis > 0),
         alert_above REAL, alert_below REAL, alert_above_fired_at TEXT, alert_below_fired_at TEXT,
         atr REAL, atr_stop_loss REAL, atr_stop_fired_at TEXT,
+        live_price REAL, live_day_change_pct REAL, live_quoted_at TEXT,
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_portfolio_positions_symbol ON portfolio_positions(symbol);
@@ -811,6 +838,28 @@ export class InvestmentDatabase {
         briefing_search INTEGER NOT NULL DEFAULT 0, tools_json TEXT NOT NULL DEFAULT '[]',
         last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS watches (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL DEFAULT 'local', title TEXT NOT NULL, question TEXT NOT NULL,
+        scope_json TEXT NOT NULL, status TEXT NOT NULL, origin TEXT NOT NULL, rationale TEXT NOT NULL DEFAULT '',
+        current_state_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        tracking_started_at TEXT, last_checked_at TEXT, ended_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_watches_status ON watches(status, updated_at DESC);
+      CREATE TABLE IF NOT EXISTS watch_runs (
+        id TEXT PRIMARY KEY, watch_id TEXT NOT NULL REFERENCES watches(id) ON DELETE CASCADE,
+        started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL,
+        query_scope_json TEXT NOT NULL, coverage_json TEXT NOT NULL, summary TEXT, error TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_watch_runs_watch ON watch_runs(watch_id, started_at DESC);
+      CREATE TABLE IF NOT EXISTS watch_signals (
+        id TEXT PRIMARY KEY, watch_id TEXT NOT NULL REFERENCES watches(id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL REFERENCES watch_runs(id) ON DELETE CASCADE,
+        type TEXT NOT NULL, direction TEXT NOT NULL, importance TEXT NOT NULL,
+        summary TEXT NOT NULL, previous_state TEXT NOT NULL, new_evidence TEXT NOT NULL,
+        impact TEXT NOT NULL, confidence TEXT NOT NULL, sources_json TEXT NOT NULL,
+        dedupe_key TEXT NOT NULL, detected_at TEXT NOT NULL, UNIQUE(watch_id, dedupe_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_watch_signals_watch ON watch_signals(watch_id, detected_at DESC);
     `);
     const runColumns = this.db.prepare("PRAGMA table_info(task_runs)").all() as Array<{ name: string }>;
     if (!runColumns.some((column) => column.name === "cost_currency")) {
@@ -823,6 +872,9 @@ export class InvestmentDatabase {
     this.ensureColumn("portfolio_positions", "atr", "REAL");
     this.ensureColumn("portfolio_positions", "atr_stop_loss", "REAL");
     this.ensureColumn("portfolio_positions", "atr_stop_fired_at", "TEXT");
+    this.ensureColumn("portfolio_positions", "live_price", "REAL");
+    this.ensureColumn("portfolio_positions", "live_day_change_pct", "REAL");
+    this.ensureColumn("portfolio_positions", "live_quoted_at", "TEXT");
     this.ensureColumn("position_risk_checks", "atr", "REAL");
     this.ensureColumn("position_risk_checks", "atr_stop_loss", "REAL");
     this.seedMcpRegistry();

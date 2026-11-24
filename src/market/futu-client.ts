@@ -27,6 +27,13 @@ export const futuKlineScriptPath = path.join(
   "quote",
   "get_kline.py",
 );
+export const futuRtDataScriptPath = path.join(
+  projectSkillsDirectory,
+  "futuapi",
+  "scripts",
+  "quote",
+  "get_rt_data.py",
+);
 export const futuIndicatorScriptPath = path.join(
   projectSkillsDirectory,
   "futuapi",
@@ -330,6 +337,37 @@ export interface FutuHistoryBar {
 }
 
 const HISTORY_KTYPES = new Set(["1d", "1w", "1M", "1Q", "1Y"]);
+
+export interface FutuRtPoint {
+  time: string;
+  price: number;
+  avgPrice: number | null;
+  volume: number;
+  turnover: number;
+}
+
+export async function queryFutuRtData(config: AppConfig, futuCode: string): Promise<FutuRtPoint[]> {
+  const output = await runFutuScript(config, futuRtDataScriptPath, [futuCode, "--json"], 45_000);
+  const parsed = parseJson<{ data?: Array<Record<string, unknown>>; error?: string }>(output, `Futu RT ${futuCode}`);
+  if (parsed.error) throw new Error(parsed.error);
+  const points = (parsed.data ?? []).flatMap((row) => {
+    const time = text(row.time);
+    const price = positiveNumber(row.price);
+    if (!time || price === undefined) return [];
+    const avgPrice = positiveNumber(row.avg_price);
+    const volume = Number(row.volume);
+    const turnover = positiveNumber(row.turnover) ?? 0;
+    return [{
+      time,
+      price,
+      avgPrice: avgPrice ?? null,
+      volume: Number.isFinite(volume) ? volume : 0,
+      turnover,
+    }];
+  });
+  if (points.length === 0) throw new Error("暂无分时数据。请确认 Futu OpenD 已连接且在交易时段。");
+  return points;
+}
 
 export async function queryFutuHistoryKline(
   config: AppConfig,

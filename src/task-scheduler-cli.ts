@@ -4,6 +4,7 @@ import { loadConfig } from "./config.js";
 import { databasePath, runtimeDirectory } from "./project-paths.js";
 import { InvestmentDatabase } from "./storage/database.js";
 import { dispatchDueTasks, nextSchedulerTick, type SchedulerTickState } from "./tasks/scheduler.js";
+import { dispatchDueWatches } from "./watch/schedule.js";
 
 const config = loadConfig();
 const database = new InvestmentDatabase(databasePath);
@@ -16,8 +17,14 @@ async function tick() {
   tickState = scheduleTick;
   try {
     const runs = config.taskSchedulerEnabled ? await dispatchDueTasks(database, { timezone: config.timezone, catchUp: scheduleTick.catchUp }) : [];
+    let watchDispatched = false;
+    try {
+      watchDispatched = await dispatchDueWatches(database, { timeZone: config.timezone, enabled: config.taskSchedulerEnabled });
+    } catch (error) {
+      console.error(`雷达调度：${error instanceof Error ? error.message : error}`);
+    }
     await mkdir(runtimeDirectory, { recursive: true });
-    await writeFile(path.join(runtimeDirectory, "task-scheduler.json"), JSON.stringify({ checkedAt: new Date().toISOString(), dispatched: runs }), { mode: 0o600 });
+    await writeFile(path.join(runtimeDirectory, "task-scheduler.json"), JSON.stringify({ checkedAt: new Date().toISOString(), dispatched: runs, watchDispatched }), { mode: 0o600 });
   } catch (error) { console.error(`Task scheduler: ${error instanceof Error ? error.message : error}`); }
   finally { busy = false; }
 }

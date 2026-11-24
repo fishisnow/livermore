@@ -44,6 +44,7 @@ export function trendActivity(model, turnoverOnly = false) {
 
 function chartOption(model, options) {
   const colors = palette(options);
+  if (model.intraday || options.intraday) return intradayOption(model, options, colors);
   const activity = trendActivity(model, options.turnoverOnly);
   const showActivity = options.showVolume && activity;
   const zoomStart = model.dates.length > 80 ? 70 : 0;
@@ -138,6 +139,82 @@ function chartOption(model, options) {
   };
 }
 
+function intradayOption(model, options, colors) {
+  const prices = model.linePrices ?? model.candles.map((candle) => candle[1]);
+  const vwap = model.vwap ?? [];
+  const activity = trendActivity(model, options.turnoverOnly);
+  const showActivity = options.showVolume && activity;
+  const series = [
+    {
+      type: "line",
+      name: "分时",
+      data: prices,
+      smooth: true,
+      showSymbol: false,
+      lineStyle: { width: 2, color: colors.up },
+      areaStyle: { color: colors.up, opacity: 0.12 },
+      z: 3,
+    },
+  ];
+  if (options.showBands && vwap.some((value) => value != null)) {
+    series.push({
+      type: "line",
+      name: "均价",
+      data: vwap,
+      smooth: true,
+      showSymbol: false,
+      lineStyle: { width: 1.5, color: colors.ma5 },
+      z: 2,
+    });
+  }
+  if (model.prevClose != null) {
+    series.push({
+      type: "line",
+      name: "昨收",
+      data: new Array(model.dates.length).fill(model.prevClose),
+      showSymbol: false,
+      lineStyle: { type: "dashed", width: 1, color: colors.muted, opacity: 0.7 },
+      z: 1,
+    });
+  }
+  if (showActivity) {
+    series.push({
+      type: "bar",
+      name: activity.label,
+      xAxisIndex: 1,
+      yAxisIndex: 1,
+      data: activity.values,
+      barMaxWidth: 6,
+      itemStyle: { color: colors.up, opacity: 0.35 },
+    });
+  }
+  return {
+    animation: false,
+    legend: { show: false },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "cross" },
+      backgroundColor: colors.tooltip,
+      borderColor: colors.line,
+      textStyle: { color: colors.ink, fontSize: 12 },
+    },
+    grid: showActivity
+      ? [
+          { left: 12, right: 58, top: 16, bottom: 168 },
+          { left: 12, right: 58, height: 96, bottom: 36 },
+        ]
+      : [{ left: 12, right: 58, top: 16, bottom: 36 }],
+    xAxis: showActivity
+      ? [categoryAxis(model.dates, colors, true), categoryAxis(model.dates, colors, true, 1)]
+      : [categoryAxis(model.dates, colors, true)],
+    yAxis: showActivity
+      ? [priceAxis(colors), { gridIndex: 1, scale: true, axisLabel: { show: false }, splitLine: { show: false } }]
+      : [priceAxis(colors)],
+    dataZoom: [{ type: "inside", xAxisIndex: showActivity ? [0, 1] : [0], start: 0, end: 100 }],
+    series,
+  };
+}
+
 function line(name, data, color, z) {
   return {
     type: "line",
@@ -194,6 +271,19 @@ function priceAxis(colors) {
 }
 
 function fitPriceScale(chart, model) {
+  if (model.intraday) {
+    const prices = model.linePrices ?? [];
+    if (!prices.length) return;
+    let min = Math.min(...prices);
+    let max = Math.max(...prices);
+    if (model.prevClose != null) {
+      min = Math.min(min, model.prevClose);
+      max = Math.max(max, model.prevClose);
+    }
+    const padding = (max - min) * 0.08 || max * 0.01 || 1;
+    chart.setOption({ yAxis: [{ min: min - padding, max: max + padding }] });
+    return;
+  }
   const zoom = chart.getOption().dataZoom?.[0] ?? {};
   const from = Math.max(0, Math.floor(model.dates.length * (zoom.start ?? 0) / 100));
   const to = Math.min(model.dates.length, Math.ceil(model.dates.length * (zoom.end ?? 100) / 100));

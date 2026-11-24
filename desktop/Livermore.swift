@@ -151,6 +151,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             let item = view.addItem(withTitle: title, action: #selector(navigateWorkspace(_:)), keyEquivalent: String(index + 1))
             item.tag = index; item.target = self
         }
+        let radar = view.addItem(withTitle: "雷达", action: #selector(navigateWorkspace(_:)), keyEquivalent: "5")
+        radar.tag = 4; radar.target = self
         view.addItem(.separator())
         view.addItem(withTitle: "切换侧边栏", action: #selector(toggleSidebar), keyEquivalent: "\\").target = self
         view.addItem(withTitle: "切换任务检查栏", action: #selector(toggleInspector), keyEquivalent: "").target = self
@@ -282,7 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc private func toggleSidebar() { webView.evaluateJavaScript("window.livermoreUI?.toggleSidebar()") }
     @objc private func toggleInspector() { webView.evaluateJavaScript("window.livermoreUI?.toggleInspector()") }
     @objc private func navigateWorkspace(_ sender: NSMenuItem) {
-        let names = ["chat", "portfolio", "tasks", "capabilities"]
+        let names = ["chat", "portfolio", "tasks", "capabilities", "radar"]
         guard names.indices.contains(sender.tag) else { return }
         showMain(); webView.evaluateJavaScript("void window.livermoreUI?.setView('\(names[sender.tag])')")
     }
