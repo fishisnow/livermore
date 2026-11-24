@@ -99,7 +99,7 @@ export function publisherOf(url: string): string {
   catch { return "unknown"; }
 }
 
-function dedupeEvidence(items: EvidenceItem[]): EvidenceItem[] {
+export function dedupeEvidence(items: EvidenceItem[]): EvidenceItem[] {
   const seen = new Set<string>();
   const unique: EvidenceItem[] = [];
   for (const item of items) {

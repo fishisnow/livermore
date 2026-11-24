@@ -88,6 +88,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   if (await handleWatchApi(request, response, url, {
     config,
     database,
+    telemetry,
     readJson: readJsonBody,
     notify: (notice: SignalNotice) => publishWatchNotice(notice),
   })) return;

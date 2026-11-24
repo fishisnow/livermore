@@ -78,8 +78,10 @@ export interface RunCoverage {
   resultCount: number;
   newCount: number;
   search: "ok" | "unavailable" | "error";
-  judgment: "baseline" | "rules" | "skipped";
+  judgment: "baseline" | "rules" | "agent" | "skipped";
   note: string;
+  /** Agent 本轮登记、用于判断的引用材料（展示在检查记录里，不再单独维护「基线来源」）。 */
+  evidence?: EvidenceItem[];
 }
 
 export interface WatchRun {

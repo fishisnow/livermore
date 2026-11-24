@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { AppConfig } from "../src/config.js";
 import { InvestmentDatabase } from "../src/storage/database.js";
-import { draftFromHoldings, draftFromIdea } from "../src/watch/draft.js";
+import { applyIdeaEnrichment, draftFromHoldings, draftFromIdea } from "../src/watch/draft.js";
 import { isResearchTheme } from "../src/watch/model.js";
 import { claimsMatch } from "../src/watch/judge.js";
 import { evidenceFromResults } from "../src/watch/search.js";
 import { dispatchDueWatches } from "../src/watch/schedule.js";
-import { checkWatch, isWatchDue, listRadar, proposeIdea, startTracking, updateWatchTheme, type SignalNotice } from "../src/watch/service.js";
+import { checkWatch, deleteTrackingWatch, isWatchDue, listRadar, proposeIdea, startTracking, updateWatchFocus, updateWatchTheme, type SignalNotice } from "../src/watch/service.js";
 import type { EvidenceItem } from "../src/watch/types.js";
 
-const config = { provider: "deepseek", model: "test", timezone: "Asia/Shanghai", searchMaxResults: 5 } as AppConfig;
+const config = { provider: "deepseek", model: "test", timezone: "Asia/Shanghai", searchMaxResults: 5, watchAgentMaxTurns: 32 } as AppConfig;
 const now = new Date("2026-11-20T01:00:00.000Z");
 
 function article(patch: Partial<EvidenceItem> & Pick<EvidenceItem, "title" | "url" | "publisher">): EvidenceItem {
@@ -46,10 +46,25 @@ describe("投资观察候选", () => {
 
   it("把一句话变成带观察范围的候选", () => {
     const draft = draftFromIdea("我想跟踪 AI 巨头的资本开支增速是否开始放缓。");
-    expect(draft.question).toBe("AI 巨头的资本开支增速是否开始放缓？");
+    expect(draft.question).toBe("我想跟踪 AI 巨头的资本开支增速是否开始放缓。");
     expect(draft.scope.focus).toEqual(expect.arrayContaining(["资本开支", "增速"]));
     expect(draft.scope.symbols).toEqual(expect.arrayContaining(["英伟达", "微软"]));
     expect(draft.origin).toBe("user");
+  });
+
+  it("模型 enrichment 补全 focus 时不改写用户问句", () => {
+    const base = draftFromIdea("黄金市场是否正在形成阶段性底部？");
+    expect(base.scope.focus).toEqual(["公开信息"]);
+    const merged = applyIdeaEnrichment(base, {
+      rationale: "验证黄金市场是否在形成阶段性底部。",
+      focus: ["实际利率", "美元指数", "ETF 资金流", "央行购金"],
+      symbols: [],
+      sectors: ["贵金属"],
+    });
+    expect(merged.question).toBe("黄金市场是否正在形成阶段性底部？");
+    expect(merged.scope.focus).toEqual(["实际利率", "美元指数", "ETF 资金流", "央行购金"]);
+    expect(merged.scope.sectors).toEqual(["贵金属"]);
+    expect(merged.scope.queries.length).toBeGreaterThan(0);
   });
 
   it("调研主题是一个可对照的预期，不是观察清单", () => {
@@ -297,6 +312,29 @@ describe("每日增量判断", () => {
   });
 });
 
+describe("删除跟踪", () => {
+  it("删除主题会级联移除 runs 与 signals", async () => {
+    const database = new InvestmentDatabase(":memory:");
+    const listed = await proposeIdea(database, config, "跟踪 DRAM 存储周期是否正在见顶。", now);
+    const watch = startTracking(database, listed.candidates.find((item) => item.origin === "user")!.id, now);
+    await checkWatch(database, watch.id, {
+      now,
+      search: found([article({
+        title: "美光维持既有扩产计划",
+        url: "https://news.example.com/plan",
+        publisher: "news.example.com",
+        summary: "美光维持既有扩产计划。",
+      })]),
+    });
+    expect(database.watches.listRuns(watch.id).length).toBeGreaterThan(0);
+    deleteTrackingWatch(database, watch.id);
+    expect(database.watches.getWatch(watch.id)).toBeUndefined();
+    expect(database.watches.listRuns(watch.id)).toEqual([]);
+    expect(database.watches.listSignals(watch.id)).toEqual([]);
+    database.close();
+  });
+});
+
 describe("观察主题", () => {
   it("可以手动修改问题并刷新检索词", async () => {
     const database = new InvestmentDatabase(":memory:");
@@ -305,6 +343,17 @@ describe("观察主题", () => {
     const updated = updateWatchTheme(database, config, watch.id, "DRAM 合约价格预期是否正在转弱？", now);
     expect(updated.watch.question).toBe("DRAM 合约价格预期是否正在转弱？");
     expect(updated.watch.scope.queries[0]).toContain("DRAM");
+    database.close();
+  });
+
+  it("可以补充重点监测并同步检索词", async () => {
+    const database = new InvestmentDatabase(":memory:");
+    const listed = await proposeIdea(database, config, "跟踪 DRAM 存储周期是否正在见顶。", now);
+    const watch = startTracking(database, listed.candidates.find((item) => item.origin === "user")!.id, now);
+    const baseFocus = database.watches.getWatch(watch.id)!.scope.focus;
+    const updated = updateWatchFocus(database, config, watch.id, [...baseFocus, "合约价格"], now);
+    expect(updated.watch.scope.focus).toEqual(expect.arrayContaining(["合约价格"]));
+    expect(updated.watch.scope.queries.some((query) => query.includes("合约价格") || query.includes(baseFocus[0] ?? ""))).toBe(true);
     database.close();
   });
 });
@@ -340,6 +389,50 @@ describe("雷达调度", () => {
     await expect(dispatchDueWatches(database, { now: open, timeZone: "Asia/Shanghai", enabled: true, launch: async () => { launches += 1; } })).resolves.toBe(false);
     expect(launches).toBe(1);
     expect(listRadar(database, config, open).tracking).toHaveLength(1);
+    database.close();
+  });
+});
+
+describe("Agent 立即检查", () => {
+  it("默认走 ReAct Agent 路径并由规则引擎发 Signal", async () => {
+    const database = new InvestmentDatabase(":memory:");
+    const listed = await proposeIdea(database, config, "跟踪 DRAM 存储周期是否正在见顶。", now);
+    const watch = startTracking(database, listed.candidates.find((item) => item.origin === "user")!.id, now);
+    const agentConfig = { ...config, watchAgentMaxTurns: 8 } as AppConfig;
+    const run = await checkWatch(database, watch.id, {
+      now,
+      config: agentConfig,
+      database,
+      runAgent: async () => ({
+        ok: true,
+        message: "",
+        evidence: [
+          article({
+            title: "美光维持既有扩产计划",
+            url: "https://news.example.com/plan",
+            publisher: "news.example.com",
+            summary: "美光维持既有扩产计划，没有更新投产时间。",
+          }),
+        ],
+        queries: ["DRAM 价格 供给"],
+        summary: "已建立基线：本轮登记 1 条证据。",
+        agentNote: "Agent 自主检索后登记证据。",
+        narrativePatch: {
+          currentNarrative: "市场关注 DRAM 供给是否继续扩张。",
+          marketExpectation: "预期未知。",
+          expectationKnown: false,
+          uncertainties: ["扩产节奏口径不一"],
+        },
+        turnCount: 3,
+        searchUsed: true,
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0, cost: 0, costCurrency: "USD" },
+      }),
+    });
+    expect(run.coverage.judgment).toBe("agent");
+    expect(run.coverage.evidence).toHaveLength(1);
+    expect(run.coverage.note).toContain("3/8");
+    expect(database.watches.getWatch(watch.id)?.state.baselineSources).toHaveLength(1);
+    expect(database.watches.getWatch(watch.id)?.state.currentNarrative).toContain("DRAM");
     database.close();
   });
 });

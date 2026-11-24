@@ -8,7 +8,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool, FinishTurn } from "@earendil-works/pi-agent-core";
 import type { AppConfig } from "../config.js";
 import { systemPromptPath } from "../project-paths.js";
 import { createReportTool } from "../tools/report-tool.js";
@@ -18,6 +18,9 @@ export interface InvestmentAgentOptions {
   tools?: AgentTool<any>[];
   systemPromptAppend?: string;
   includeReportTool?: boolean;
+  finishTurn?: FinishTurn;
+  /** Caps automatic tool-followup turns (each model request counts as one). */
+  maxTurns?: number;
 }
 
 export async function createInvestmentAgent(config: AppConfig, options: InvestmentAgentOptions = {}): Promise<Agent> {
@@ -41,6 +44,21 @@ export async function createInvestmentAgent(config: AppConfig, options: Investme
     ...(options.tools ?? []),
   ];
   const allowed = new Set(tools.map((tool) => tool.name));
+  const userFinishTurn = options.finishTurn;
+  let turnCount = 0;
+  const maxTurns = options.maxTurns;
+  const finishTurn: FinishTurn | undefined = (maxTurns == null && !userFinishTurn) ? undefined : async (turn, signal) => {
+    if (turn.message.stopReason === "error" || turn.message.stopReason === "aborted") return undefined;
+    if (userFinishTurn) {
+      const decision = await userFinishTurn(turn, signal);
+      if (decision) return decision;
+    }
+    if (maxTurns != null) {
+      turnCount += 1;
+      if (turnCount >= maxTurns) return { action: "end" };
+    }
+    return undefined;
+  };
   return new Agent({
     initialState: {
       systemPrompt,
@@ -51,6 +69,7 @@ export async function createInvestmentAgent(config: AppConfig, options: Investme
     streamFn: models.streamSimple.bind(models),
     sessionId: randomUUID(),
     toolExecution: "parallel",
+    ...(finishTurn ? { finishTurn } : {}),
     beforeToolCall: async ({ toolCall }) => {
       if (!allowed.has(toolCall.name)) {
         return { block: true, reason: `Tool ${toolCall.name} is not allowed by the research-only policy.` };

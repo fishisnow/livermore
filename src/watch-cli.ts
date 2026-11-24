@@ -1,13 +1,14 @@
 import { loadConfig } from "./config.js";
 import { MessageCenter } from "./notifications/message-center.js";
+import { Telemetry } from "./observability/telemetry.js";
 import { databasePath } from "./project-paths.js";
-import { createWatchSearch } from "./watch/search.js";
 import { checkWatch, isWatchDue, type SignalNotice } from "./watch/service.js";
 import { InvestmentDatabase } from "./storage/database.js";
 
 const config = loadConfig();
 const database = new InvestmentDatabase(databasePath);
 const messages = new MessageCenter(config, database);
+const telemetry = Telemetry.create(config);
 
 const targets = database.watches.listCheckTargets().filter((target) => isWatchDue({
   status: target.status,
@@ -21,7 +22,8 @@ for (const target of targets) {
   try {
     const run = await checkWatch(database, target.id, {
       config,
-      search: createWatchSearch(config, database),
+      database,
+      telemetry,
       notify: (notice) => notify(notice),
     });
     console.log(`雷达 ${target.id} ${run.status}${run.summary ? `：${run.summary}` : ""}${run.error ? `：${run.error}` : ""}`);
@@ -30,6 +32,8 @@ for (const target of targets) {
   }
 }
 
+await telemetry.forceFlush();
+await telemetry.shutdown();
 database.close();
 
 async function notify(notice: SignalNotice): Promise<void> {

@@ -35,9 +35,33 @@ export function draftFromHoldings(holdings: HoldingRef[]): CandidateDraft[] {
   return drafts.slice(0, 5);
 }
 
+export interface IdeaEnrichmentInput {
+  rationale: string;
+  focus: string[];
+  symbols: string[];
+  sectors: string[];
+}
+
+/** 保留用户问句，用模型补全 rationale / focus / symbols / sectors。 */
+export function applyIdeaEnrichment(base: CandidateDraft, enrichment: IdeaEnrichmentInput): CandidateDraft {
+  const focus = enrichment.focus.length >= 2 ? unique(enrichment.focus).slice(0, 6) : base.scope.focus;
+  const symbols = enrichment.symbols.length > 0 ? unique(enrichment.symbols).slice(0, 8) : base.scope.symbols;
+  const sectors = enrichment.sectors.length > 0 ? unique(enrichment.sectors).slice(0, 4) : base.scope.sectors;
+  const question = base.question;
+  return {
+    ...base,
+    rationale: clip(enrichment.rationale.trim() || base.rationale, 80),
+    scope: {
+      focus,
+      symbols,
+      sectors,
+      queries: unique(buildQueries(question, focus, symbols)).slice(0, 3),
+    },
+  };
+}
+
 export function draftFromIdea(text: string): CandidateDraft {
-  const stripped = text.trim().replace(/^(请)?(帮我)?(我想)?(持续)?(跟踪|关注|观察)/, "").replace(/^[：:，,\s]+/, "").trim();
-  const question = formatWatchQuestion(stripped.length >= 8 ? stripped : text.trim());
+  const question = text.trim();
   const foundFocus = FOCUS_WORDS.filter((word) => question.includes(word));
   const foundNames = NAMES.filter((name) => question.toLowerCase().includes(name.toLowerCase()));
   const aiCapex = /AI|人工智能|巨头|算力/.test(question) && /资本开支|capex|增速/i.test(question);
@@ -49,11 +73,12 @@ export function draftFromIdea(text: string): CandidateDraft {
   ];
   return draft({
     question,
-    rationale: "从你写下的问题整理出观察范围。确认后才开始每天比较新证据。",
+    rationale: "你写下的跟踪主题。确认后每天比较新证据与上次状态。",
     origin: "user",
     focus: focus.length > 0 ? focus.slice(0, 6) : ["公开信息"],
     symbols: symbols.slice(0, 8),
     sectors,
+    preserveQuestion: true,
   });
 }
 
@@ -144,8 +169,9 @@ function draft(input: {
   symbols: string[];
   sectors: string[];
   queries?: string[];
+  preserveQuestion?: boolean;
 }): CandidateDraft {
-  const question = formatWatchQuestion(input.question);
+  const question = input.preserveQuestion ? input.question.trim() : formatWatchQuestion(input.question);
   const scope: WatchScope = {
     focus: unique(input.focus).slice(0, 6),
     symbols: unique(input.symbols).slice(0, 8),
@@ -180,6 +206,13 @@ export function formatWatchQuestion(text: string): string {
 
 function unique(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+export function normalizeFocusList(focus: string[]): string[] {
+  return unique(focus)
+    .map((item) => item.replace(/\s+/g, " ").trim())
+    .filter((item) => item.length >= 2 && item.length <= 16)
+    .slice(0, 6);
 }
 
 function clip(value: string, max: number): string {

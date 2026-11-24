@@ -30,6 +30,8 @@ export interface AppConfig {
   notifyOnSuccess: boolean;
   macosNotificationsEnabled: boolean;
   taskSchedulerEnabled: boolean;
+  /** Max ReAct turns for radar「立即检查」agent loop. */
+  watchAgentMaxTurns: number;
 }
 
 export function loadConfig(env?: NodeJS.ProcessEnv): AppConfig {
@@ -62,6 +64,10 @@ export function loadConfig(env?: NodeJS.ProcessEnv): AppConfig {
   const futuOpenDPort = Number.parseInt(source.FUTU_OPEND_PORT?.trim() || "11111", 10);
   if (!Number.isInteger(futuOpenDPort) || futuOpenDPort < 1 || futuOpenDPort > 65535) {
     throw new Error("FUTU_OPEND_PORT must be an integer between 1 and 65535.");
+  }
+  const watchAgentMaxTurns = Number.parseInt(source.WATCH_AGENT_MAX_TURNS?.trim() || "32", 10);
+  if (!Number.isInteger(watchAgentMaxTurns) || watchAgentMaxTurns < 1 || watchAgentMaxTurns > 128) {
+    throw new Error("WATCH_AGENT_MAX_TURNS must be an integer between 1 and 128.");
   }
   const feishuAppId = optional(source.FEISHU_APP_ID);
   const feishuAppSecret = optional(source.FEISHU_APP_SECRET);
@@ -97,6 +103,7 @@ export function loadConfig(env?: NodeJS.ProcessEnv): AppConfig {
     notifyOnSuccess: booleanValue(source.NOTIFY_ON_SUCCESS, true, "NOTIFY_ON_SUCCESS"),
     macosNotificationsEnabled: booleanValue(source.MACOS_NOTIFICATIONS_ENABLED, process.platform === "darwin", "MACOS_NOTIFICATIONS_ENABLED"),
     taskSchedulerEnabled: booleanValue(source.TASK_SCHEDULER_ENABLED, true, "TASK_SCHEDULER_ENABLED"),
+    watchAgentMaxTurns,
   };
 }
 

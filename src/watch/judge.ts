@@ -64,6 +64,22 @@ export function isSystemNarrative(narrative: string): boolean {
   return /尚未形成|已把最近|最近 24|等待第一次|还没有从证据里形成市场叙事/.test(narrative);
 }
 
+/** Agent 路径：以 Agent 登记的证据建立基线，不做关键词 relevance 过滤。 */
+export function establishAgentBaseline(state: WatchState, items: EvidenceItem[]): Judgment {
+  const next = remember(state, items);
+  next.baselined = true;
+  next.baselineSources = items.slice(0, 12).map(sourceOf);
+  if (items.length === 0) {
+    next.currentNarrative = "还没有从本轮检查登记到可引用的公开材料。";
+    next.marketExpectation = "预期未知。";
+    next.expectationKnown = false;
+  }
+  const summary = items.length > 0
+    ? `Agent 建立观察基线，登记 ${items.length} 条引用材料。`
+    : "Agent 完成基线检查，未登记可引用材料；叙事与预期仍待后续检查补全。";
+  return { baseline: true, signals: [], state: next, summary };
+}
+
 export function establishBaseline(state: WatchState, items: EvidenceItem[], now: Date, lens: WatchLens): Judgment {
   const related = items.filter((item) => relates(item, lens));
   const recent = related.filter((item) => recentEnough(item, now));

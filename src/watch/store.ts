@@ -79,6 +79,10 @@ export class WatchStore {
     return Number(this.db.prepare("DELETE FROM watches WHERE id = ? AND status = 'candidate'").run(id).changes) > 0;
   }
 
+  deleteWatch(id: string): boolean {
+    return Number(this.db.prepare("DELETE FROM watches WHERE id = ? AND status != 'candidate'").run(id).changes) > 0;
+  }
+
   getWatch(id: string): WatchRecord | undefined {
     const row = this.db.prepare("SELECT * FROM watches WHERE id = ?").get(id);
     return row ? mapWatch(row) : undefined;
@@ -129,6 +133,18 @@ export class WatchStore {
     if (!this.getWatch(id)) return undefined;
     this.db.prepare("UPDATE watches SET question = ?, title = ?, scope_json = ?, updated_at = ? WHERE id = ?")
       .run(question, title, JSON.stringify(scope), at, id);
+    return this.getWatch(id);
+  }
+
+  updateScope(id: string, scope: WatchScope, at: string, rationale?: string): WatchRecord | undefined {
+    if (!this.getWatch(id)) return undefined;
+    if (rationale !== undefined) {
+      this.db.prepare("UPDATE watches SET scope_json = ?, rationale = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(scope), rationale, at, id);
+    } else {
+      this.db.prepare("UPDATE watches SET scope_json = ?, updated_at = ? WHERE id = ?")
+        .run(JSON.stringify(scope), at, id);
+    }
     return this.getWatch(id);
   }
 
@@ -355,9 +371,28 @@ function readCoverage(value: string | null): RunCoverage {
     resultCount: numberValue(parsed.resultCount),
     newCount: numberValue(parsed.newCount),
     search: parsed.search === "ok" || parsed.search === "unavailable" || parsed.search === "error" ? parsed.search : "error",
-    judgment: parsed.judgment === "baseline" || parsed.judgment === "rules" || parsed.judgment === "skipped" ? parsed.judgment : "skipped",
+    judgment: parsed.judgment === "baseline" || parsed.judgment === "rules" || parsed.judgment === "agent" || parsed.judgment === "skipped"
+      ? parsed.judgment
+      : "skipped",
     note: typeof parsed.note === "string" ? parsed.note : "",
+    evidence: readRunEvidence(parsed.evidence),
   };
+}
+
+function readRunEvidence(value: unknown): EvidenceItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const source = item as Partial<EvidenceItem>;
+    if (typeof source.title !== "string" || typeof source.url !== "string") return [];
+    return [{
+      title: source.title,
+      url: source.url,
+      summary: typeof source.summary === "string" ? source.summary : "",
+      publishedAt: typeof source.publishedAt === "string" ? source.publishedAt : null,
+      publisher: typeof source.publisher === "string" ? source.publisher : "",
+    }];
+  });
 }
 
 function readSources(value: string | null): EvidenceItem[] {

@@ -5,6 +5,11 @@ let screen = { kind: "list", id: "" };
 let pending = "";
 let requestId = 0;
 let editingTheme = false;
+let detailTab = "snapshot";
+let historyVisible = { runs: 5, signals: 5 };
+let menuOpen = false;
+/** @type {{ logs: string[], thinking: string, tool: string | null } | null} */
+let checkLive = null;
 
 export function bindRadar(notify) {
   toast = notify;
@@ -12,6 +17,11 @@ export function bindRadar(notify) {
   if (!root) return;
   root.addEventListener("click", onClick);
   root.addEventListener("submit", onSubmit);
+  document.addEventListener("click", () => {
+    if (!menuOpen) return;
+    menuOpen = false;
+    if (screen.kind === "detail") paint();
+  });
 }
 
 export function openRadar() {
@@ -47,6 +57,7 @@ function paint() {
   const root = document.querySelector("#radar-root");
   if (!root) return;
   if (data) updateNav(data);
+  root.classList.toggle("radar-is-detail", screen.kind === "detail");
   root.innerHTML = screen.kind === "detail" ? detailHtml() : listHtml();
 }
 
@@ -75,7 +86,7 @@ function listHtml() {
     ? `<details class="radar-ended"><summary>已结束 · ${data.ended.length}</summary>${data.ended.map(watchRow).join("")}</details>`
     : "";
   return `
-    <p class="radar-lead">AI 提出值得持续验证的问题。你确认后，每天只比较新证据和上次状态。</p>
+    <p class="radar-lead">AI 提出值得持续验证的问题。你写下的一句话也会由 AI 拆解监测维度（问句保持你的原话）。确认后每天只比较新证据和上次状态。</p>
     <form class="radar-compose" id="radar-idea">
       <label class="sr-only" for="radar-text">想跟踪的问题</label>
       <input id="radar-text" name="text" maxlength="200" placeholder="写下想跟踪的问题，例如：AI 巨头的资本开支增速是否开始放缓" autocomplete="off">
@@ -124,38 +135,18 @@ function detailHtml() {
   if (!detail) return `<p class="radar-lead">正在读取这条观察。</p>`;
   const watch = detail.watch;
   const failed = watch.latestRun?.status === "failed" ? watch.latestRun : null;
-  const latest = detail.signals[0];
-  const disagreements = watch.state.uncertainties.length
-    ? watch.state.uncertainties.join("、")
-    : "还没有从证据里看到明确分歧。";
+  const checking = isWatchChecking(watch);
   const checkButton = watch.status === "active"
-    ? `<button class="primary-button" type="button" data-check ${pending ? "disabled" : ""}>${pending === "check" ? "正在检查" : "立即检查"}</button>`
+    ? `<button class="primary-button${checking ? " is-loading" : ""}" type="button" data-check ${checking ? "disabled" : ""} aria-busy="${checking ? "true" : "false"}">${checking ? `<span class="btn-spinner" aria-hidden="true"></span>检查中` : "立即检查"}</button>`
     : watch.status === "paused"
       ? `<button class="primary-button" type="button" data-status="active" ${pending ? "disabled" : ""}>继续跟踪</button>`
       : "";
-  const more = watch.status === "ended" ? "" : `
-    <details class="radar-more">
-      <summary aria-label="更多操作">⋯</summary>
-      ${watch.status === "active" ? `<button type="button" data-status="paused" ${pending ? "disabled" : ""}>暂停跟踪</button>` : ""}
-      <button type="button" data-status="ended" ${pending ? "disabled" : ""}>结束跟踪</button>
-    </details>`;
-  const signals = detail.signals.length
-    ? `<ol class="signal-timeline">${detail.signals.map(signalCard).join("")}</ol>`
-    : `<p class="radar-empty">已建立基线。只有足以改变判断的证据才会出现在这里。</p>`;
-  const foot = `
-    <div class="radar-foot">
-      ${baselineHtml(watch)}
-      ${detail.runs.length ? `<details class="radar-fold"><summary>最近检查 · ${detail.runs.length}</summary><ul class="run-log">${detail.runs.map(runRow).join("")}</ul></details>` : ""}
-    </div>`;
-  const latestBlock = latest
-    ? `<div class="radar-latest-box is-hot"><span>最新变化</span><p>${esc(latest.summary)}</p></div>`
-    : `<div class="radar-latest-box"><span>最新变化</span><p>暂无</p></div>`;
   return `
     <header class="radar-detail-head">
       <button class="quiet-button radar-back" type="button" data-back>返回</button>
       <div class="radar-toolbar">
         ${checkButton}
-        ${more}
+        ${detailMenu(watch)}
       </div>
     </header>
     <section class="radar-hero">
@@ -163,21 +154,158 @@ function detailHtml() {
       ${themeBlock(watch)}
       ${failed ? `<p class="radar-alert">${esc(failed.error || "这次检查没有完成。")} 这次不能判断市场预期有没有变化。</p>` : ""}
     </section>
-    <section class="radar-snapshot">
-      <p class="radar-snapshot-lead">${esc(shownNarrative(watch.state))}</p>
-      ${latestBlock}
-      <dl class="radar-meta">
-        <div><dt>市场预期</dt><dd>${esc(shownExpectation(watch.state))}</dd></div>
-        <div><dt>关键分歧</dt><dd>${esc(disagreements)}</dd></div>
-        <div class="is-wide"><dt>重点监测</dt><dd>${focusTags(watch.scope.focus)}</dd></div>
-      </dl>
-    </section>
-    <section class="radar-block">
-      <div class="radar-block-head"><span>Signal 时间线</span><span>${detail.signals.length}</span></div>
-      ${signals}
-    </section>
-    ${foot}
+    ${checkLiveHtml(watch)}
+    ${detailTabs()}
+    ${detailTabPanel(watch, detail, failed)}
   `;
+}
+
+function isWatchChecking(watch) {
+  return pending === "check" || watch?.latestRun?.status === "running";
+}
+
+function checkLiveHtml(watch) {
+  if (!isWatchChecking(watch) && !checkLive) return "";
+  const logs = checkLive?.logs ?? [];
+  const thinking = checkLive?.thinking ?? "";
+  const steps = logs.length
+    ? `<ol class="radar-check-steps">${logs.map((line) => `<li>${esc(line)}</li>`).join("")}</ol>`
+    : `<p class="radar-quiet">Agent 正在启动…</p>`;
+  const think = thinking
+    ? `<pre class="radar-check-thinking">${esc(thinking)}</pre>`
+    : "";
+  const tool = checkLive?.tool ? `<span class="radar-check-tool">当前：${esc(checkLive.tool)}</span>` : "";
+  return `
+    <section class="radar-check-live" id="radar-check-live" aria-live="polite">
+      <div class="radar-block-head"><span>检查过程</span>${tool}</div>
+      <div class="radar-check-live-body" id="radar-check-live-body">
+        ${steps}
+        ${think}
+      </div>
+    </section>`;
+}
+
+function refreshCheckLiveDom() {
+  const root = document.querySelector("#radar-check-live");
+  const body = document.querySelector("#radar-check-live-body");
+  if (!root || !body || !checkLive) return;
+  const steps = checkLive.logs.length
+    ? `<ol class="radar-check-steps">${checkLive.logs.map((line) => `<li>${esc(line)}</li>`).join("")}</ol>`
+    : `<p class="radar-quiet">Agent 正在启动…</p>`;
+  const think = checkLive.thinking
+    ? `<pre class="radar-check-thinking">${esc(checkLive.thinking)}</pre>`
+    : "";
+  const tool = checkLive.tool ? `<span class="radar-check-tool">当前：${esc(checkLive.tool)}</span>` : "";
+  const head = root.querySelector(".radar-block-head");
+  if (head) head.innerHTML = `<span>检查过程</span>${tool}`;
+  body.innerHTML = `${steps}${think}`;
+  body.scrollTop = body.scrollHeight;
+}
+
+function ingestCheckProgress(event) {
+  if (!checkLive) checkLive = { logs: [], thinking: "", tool: null };
+  if (event.type === "log" && event.text) {
+    const last = checkLive.logs[checkLive.logs.length - 1];
+    if (last !== event.text) {
+      checkLive.logs.push(event.text);
+      if (checkLive.logs.length > 100) checkLive.logs.shift();
+    }
+  } else if (event.type === "delta" && event.text) {
+    checkLive.thinking += event.text;
+    if (checkLive.thinking.length > 16_000) checkLive.thinking = checkLive.thinking.slice(-12_000);
+  } else if (event.type === "tool_start") {
+    checkLive.tool = event.label || event.name;
+  } else if (event.type === "tool_end") {
+    checkLive.tool = null;
+  }
+  refreshCheckLiveDom();
+}
+
+function detailMenu(watch) {
+  if (watch.status === "candidate") return "";
+  return `
+    <div class="radar-menu">
+      <button type="button" class="icon-button radar-menu-trigger" aria-label="更多操作" aria-haspopup="menu" aria-expanded="${menuOpen ? "true" : "false"}" data-menu-toggle ${pending ? "disabled" : ""}>
+        <svg class="icon"><use href="#i-more"/></svg>
+      </button>
+      ${menuOpen ? `
+      <div class="radar-menu-panel" role="menu" aria-label="观察操作">
+        ${watch.status === "active" ? `<button type="button" role="menuitem" data-status="paused" ${pending ? "disabled" : ""}>暂停跟踪</button>` : ""}
+        ${watch.status === "paused" ? `<button type="button" role="menuitem" data-status="active" ${pending ? "disabled" : ""}>继续跟踪</button>` : ""}
+        ${watch.status !== "ended" ? `<button type="button" role="menuitem" data-status="ended" ${pending ? "disabled" : ""}>结束跟踪</button>` : ""}
+        <button type="button" role="menuitem" class="is-danger" data-delete-watch ${pending ? "disabled" : ""}>删除主题</button>
+      </div>` : ""}
+    </div>`;
+}
+
+function detailTabs() {
+  const tabs = [
+    { id: "snapshot", label: "概览" },
+    { id: "runs", label: "检查记录", count: detail?.runs?.length ?? 0 },
+    { id: "signals", label: "Signal", count: detail?.signals?.length ?? 0 },
+  ];
+  return `
+    <div class="radar-tabs" role="tablist" aria-label="观察详情分区">
+      ${tabs.map((tab) => `
+        <button type="button" class="radar-tab${detailTab === tab.id ? " is-active" : ""}" role="tab" data-tab="${tab.id}" aria-selected="${detailTab === tab.id ? "true" : "false"}">
+          ${esc(tab.label)}${tab.count == null ? "" : ` <span class="radar-tab-count">${tab.count}</span>`}
+        </button>`).join("")}
+    </div>`;
+}
+
+function detailTabPanel(watch, detailView, failed) {
+  if (detailTab === "runs") return runsPanel(detailView.runs);
+  if (detailTab === "signals") return signalsPanel(detailView.signals);
+  const latest = detailView.signals[0];
+  const disagreements = watch.state.uncertainties.length
+    ? watch.state.uncertainties.join("、")
+    : "还没有从证据里看到明确分歧。";
+  const latestBlock = latest
+    ? `<div class="radar-latest-box is-hot"><span>最新变化</span><p>${esc(latest.summary)}</p></div>`
+    : `<div class="radar-latest-box"><span>最新变化</span><p>暂无</p></div>`;
+  const previewRuns = detailView.runs.slice(0, 2).map(runRow).join("");
+  return `
+    <section class="radar-tab-body" role="tabpanel">
+      <div class="radar-snapshot">
+        <p class="radar-snapshot-lead">${esc(shownNarrative(watch.state))}</p>
+        ${latestBlock}
+        <dl class="radar-meta">
+          <div><dt>市场预期</dt><dd>${esc(shownExpectation(watch.state))}</dd></div>
+          <div><dt>关键分歧</dt><dd>${esc(disagreements)}</dd></div>
+          ${focusMonitorBlock(watch, data?.modelAvailable)}
+        </dl>
+      </div>
+      ${detailView.runs.length ? `
+        <div class="radar-preview">
+          <div class="radar-block-head"><span>最近检查</span><button type="button" class="quiet-button" data-tab="runs">查看全部</button></div>
+          <ul class="run-log">${previewRuns}</ul>
+        </div>` : ""}
+    </section>`;
+}
+
+function runsPanel(runs) {
+  if (!runs.length) return `<section class="radar-tab-body"><p class="radar-quiet">还没有检查记录。</p></section>`;
+  const visible = runs.slice(0, historyVisible.runs);
+  const remaining = runs.length - visible.length;
+  return `
+    <section class="radar-tab-body" role="tabpanel">
+      <p class="radar-note">按时间倒序，最新的在最上。引用材料在每条记录下展开。</p>
+      <ul class="run-log">${visible.map(runRow).join("")}</ul>
+      ${remaining > 0 ? `<button type="button" class="quiet-button radar-load-more" data-more-runs>再显示 ${Math.min(8, remaining)} 条 · 还剩 ${remaining}</button>` : ""}
+    </section>`;
+}
+
+function signalsPanel(signals) {
+  if (!signals.length) {
+    return `<section class="radar-tab-body"><p class="radar-quiet">尚无 Signal。只有足以改变判断的证据会出现在这里。</p></section>`;
+  }
+  const visible = signals.slice(0, historyVisible.signals);
+  const remaining = signals.length - visible.length;
+  return `
+    <section class="radar-tab-body" role="tabpanel">
+      <ol class="signal-timeline">${visible.map(signalCard).join("")}</ol>
+      ${remaining > 0 ? `<button type="button" class="quiet-button radar-load-more" data-more-signals>再显示 ${Math.min(5, remaining)} 条 · 还剩 ${remaining}</button>` : ""}
+    </section>`;
 }
 
 function themeBlock(watch) {
@@ -210,6 +338,7 @@ function statusChips(watch, signalCount) {
 function statusChip(watch) {
   if (watch.status === "paused") return "已暂停";
   if (watch.status === "ended") return "已结束";
+  if (watch.latestRun?.status === "running") return "检查中";
   if (watch.latestRun?.status === "failed") return watch.latestRun.coverage?.search === "unavailable" ? "检查不完整" : "检查失败";
   if (watch.status === "active") return "监测中";
   return "观察";
@@ -220,28 +349,33 @@ function focusTags(focus) {
   return `<div class="radar-tags">${items}</div>`;
 }
 
-function baselineHtml(watch) {
-  const sources = baselineSources(watch);
-  if (!watch.state.baselined) {
-    return `<p class="radar-empty">还没有基线。第一次检查成功后，证据支持的市场状态会写在上面，来源收在这里。</p>`;
-  }
-  if (sources.length === 0) {
-    return `<p class="radar-empty">基线里没有留下与观察问题相关的来源。</p>`;
-  }
-  const items = sources.map((source) => {
-    const href = safeHttpUrl(source.url);
-    const title = href ? `<a href="${esc(href)}" target="_blank" rel="noreferrer">${esc(source.title)}</a>` : `<strong>${esc(source.title)}</strong>`;
-    const meta = [source.publisher, source.publishedAt ? dayLabel(source.publishedAt) : "日期不明"].filter(Boolean).join(" · ");
-    const summary = source.summary && source.summary !== source.title ? `<p>${esc(source.summary)}</p>` : "";
-    return `<li>${title}<span class="baseline-meta">${esc(meta)}</span>${summary}</li>`;
+function focusMonitorBlock(watch, modelAvailable) {
+  const editable = watch.status !== "ended" && watch.status !== "candidate";
+  const focus = watch.scope?.focus?.length ? watch.scope.focus : ["公开信息"];
+  const tags = focus.map((word) => {
+    if (!editable) return `<span class="radar-tag">${esc(word)}</span>`;
+    return `<span class="radar-tag is-editable">${esc(word)}<button type="button" class="radar-tag-remove" data-remove-focus="${esc(word)}" aria-label="移除 ${esc(word)}">×</button></span>`;
   }).join("");
+  const retry = modelAvailable && editable
+    ? `<button type="button" class="icon-button radar-focus-retry" data-regen-focus aria-label="重新生成" ${pending ? "disabled" : ""}><svg class="icon"><use href="#i-retry"/></svg></button>`
+    : "";
+  const addForm = editable
+    ? `<form class="radar-focus-add" id="radar-focus-add">
+        <input name="add" maxlength="16" placeholder="添加维度" autocomplete="off" ${pending ? "disabled" : ""}>
+        <button class="quiet-button" type="submit" ${pending === "focus" ? "disabled" : ""}>${pending === "focus" ? "…" : "添加"}</button>
+      </form>`
+    : "";
   return `
-    <details class="radar-fold">
-      <summary>基线来源 · ${sources.length}</summary>
-      <p class="radar-note">这些是建立基线时用过的公开信息，本身不是变化。</p>
-      <ul class="baseline-list">${items}</ul>
-    </details>
-  `;
+    <div class="is-wide radar-focus-panel">
+      <div class="radar-focus-toolbar">
+        <span class="radar-focus-label">重点监测</span>
+        ${retry}
+      </div>
+      <div class="radar-focus-body">
+        <div class="radar-tags">${tags}</div>
+        ${addForm}
+      </div>
+    </div>`;
 }
 
 function shownNarrative(state) {
@@ -261,19 +395,6 @@ function marketLine(state) {
 
 function isSystemNarrative(narrative) {
   return /尚未形成|已把最近|最近 24|等待第一次|还没有从证据里形成市场叙事/.test(narrative || "");
-}
-
-function baselineSources(watch) {
-  const saved = watch.state.baselineSources ?? [];
-  if (saved.length > 0) return saved;
-  if (!watch.state.baselined) return [];
-  return (watch.state.knownEvidence ?? []).map((item) => ({
-    title: item.title,
-    url: item.url,
-    summary: "",
-    publishedAt: item.publishedAt,
-    publisher: "",
-  }));
 }
 
 function safeHttpUrl(url) {
@@ -310,17 +431,91 @@ function signalCard(signal) {
 
 function runRow(run) {
   const when = run.finishedAt || run.startedAt;
+  const label = runLabel(run);
+  const badgeClass = runBadgeClass(run);
   let text = run.summary || "没有新的结论。";
   if (run.status === "failed") text = `${run.error || "检查没有完成。"} 这次不能判断市场预期有没有变化。`;
   if (run.status === "running") text = "正在检查。";
-  return `<li><time datetime="${esc(when)}">${esc(timeLabel(when))}</time><span><em>${esc(runLabel(run))}</em>${esc(text)}</span></li>`;
+  const { footnote, turns } = parseRunNote(run.coverage?.note ?? "");
+  const materialCount = run.coverage?.evidence?.length ?? run.coverage?.resultCount ?? 0;
+  const stats = [
+    materialCount > 0 ? `${materialCount} 条引用` : "",
+    turns ? `Agent ${turns}` : "",
+  ].filter(Boolean).join(" · ");
+  const materials = runMaterials(run);
+  return `
+    <li class="run-entry">
+      <article class="run-card ${badgeClass}">
+        <header class="run-card-head">
+          <span class="run-badge">${esc(label)}</span>
+          <time datetime="${esc(when)}">${esc(timeLabel(when))}</time>
+        </header>
+        <p class="run-conclusion">${esc(text)}</p>
+        ${stats ? `<p class="run-stats">${esc(stats)}</p>` : ""}
+        ${footnote && footnote !== text && !text.includes(footnote.slice(0, 24)) ? `<p class="run-footnote">${esc(footnote)}</p>` : ""}
+        ${materials}
+      </article>
+    </li>`;
+}
+
+function parseRunNote(note) {
+  const match = note.match(/（Agent (\d+\/\d+) 轮）/);
+  const turns = match?.[1] ?? "";
+  const footnote = note.replace(/\s*（Agent \d+\/\d+ 轮）\s*$/, "").trim();
+  return { footnote: footnote && !/^[。.]$/.test(footnote) ? footnote : "", turns };
+}
+
+function runBadgeClass(run) {
+  if (run.status === "failed") return "is-failed";
+  if (run.status === "changed") return "is-changed";
+  if (runLabel(run) === "基线建立") return "is-baseline";
+  if (run.coverage?.judgment === "agent") return "is-agent";
+  return "";
+}
+
+function runMaterials(run) {
+  const list = run.coverage?.evidence ?? [];
+  if (!list.length) return "";
+  const items = list.map((source) => evidenceItem(source)).join("");
+  const open = list.length <= 4 ? " open" : "";
+  return `
+    <details class="run-evidence-fold"${open}>
+      <summary>查看引用 · ${list.length}</summary>
+      <ul class="run-evidence-list">${items}</ul>
+    </details>`;
+}
+
+function evidenceItem(source) {
+  const href = safeHttpUrl(source.url);
+  const title = href
+    ? `<a href="${esc(href)}" target="_blank" rel="noreferrer">${esc(source.title)}</a>`
+    : `<strong>${esc(source.title)}</strong>`;
+  const meta = [source.publisher, source.publishedAt ? dayLabel(source.publishedAt) : ""].filter(Boolean).join(" · ");
+  const raw = source.summary?.trim() ?? "";
+  const showSummary = raw && raw !== source.title;
+  const long = raw.length > 200;
+  const summary = showSummary
+    ? (long
+      ? `<details class="run-evidence-body"><summary>摘要</summary><p>${esc(raw)}</p></details>`
+      : `<p class="run-evidence-summary">${esc(raw)}</p>`)
+    : "";
+  return `
+    <li class="run-evidence-item">
+      <div class="run-evidence-title">${title}</div>
+      ${meta ? `<span class="run-evidence-meta">${esc(meta)}</span>` : ""}
+      ${summary}
+    </li>`;
 }
 
 function runLabel(run) {
   if (run.status === "running") return "正在检查";
   if (run.status === "failed" && run.coverage?.search === "unavailable") return "检查不完整";
   if (run.status === "failed") return "检查失败";
-  if (run.coverage?.judgment === "baseline") return "基线建立成功";
+  if (run.coverage?.judgment === "baseline") return "基线建立";
+  if (run.coverage?.judgment === "agent" && run.status === "no_change" && (run.coverage.resultCount ?? 0) > 0 && !/Signal|变化/.test(run.summary || "")) {
+    return "基线建立";
+  }
+  if (run.coverage?.judgment === "agent") return "Agent 检查";
   if (run.status === "changed") return "发现新 Signal";
   return "无实质变化";
 }
@@ -352,6 +547,7 @@ async function onClick(event) {
     screen = { kind: "list", id: "" };
     detail = null;
     editingTheme = false;
+    menuOpen = false;
     paint();
     return;
   }
@@ -359,8 +555,44 @@ async function onClick(event) {
     screen = { kind: "detail", id: button.dataset.open };
     detail = null;
     editingTheme = false;
+    detailTab = "snapshot";
+    historyVisible = { runs: 5, signals: 5 };
+    menuOpen = false;
     paint();
     await load();
+    return;
+  }
+  if (button.dataset.tab) {
+    detailTab = button.dataset.tab;
+    paint();
+    return;
+  }
+  if (button.hasAttribute("data-menu-toggle")) {
+    event.stopPropagation();
+    menuOpen = !menuOpen;
+    paint();
+    return;
+  }
+  if (button.hasAttribute("data-more-runs")) {
+    historyVisible.runs += 8;
+    paint();
+    return;
+  }
+  if (button.hasAttribute("data-more-signals")) {
+    historyVisible.signals += 5;
+    paint();
+    return;
+  }
+  if (button.hasAttribute("data-delete-watch")) {
+    event.stopPropagation();
+    menuOpen = false;
+    if (!window.confirm("删除后，这条观察的主题、检查记录和 Signal 都会从本机移除，且无法恢复。确认删除？")) return;
+    await act("delete", async () => {
+      await api(`/api/watches/${encodeURIComponent(screen.id)}`, { method: "DELETE" });
+      screen = { kind: "list", id: "" };
+      detail = null;
+      detailTab = "snapshot";
+    });
     return;
   }
   if (button.hasAttribute("data-edit-theme")) {
@@ -387,6 +619,9 @@ async function onClick(event) {
       const created = await api("/api/watches", { method: "POST", body: JSON.stringify({ candidateId: button.dataset.track }) });
       screen = { kind: "detail", id: created.watch.watch.id };
       detail = created.watch;
+      detailTab = "snapshot";
+      historyVisible = { runs: 5, signals: 5 };
+      menuOpen = false;
     });
     return;
   }
@@ -394,17 +629,35 @@ async function onClick(event) {
     await act("dismiss", () => api(`/api/watches/${encodeURIComponent(button.dataset.dismiss)}`, { method: "DELETE" }));
     return;
   }
-  if (button.hasAttribute("data-check")) {
-    await act("check", async () => {
-      const result = await api(`/api/watches/${encodeURIComponent(screen.id)}/check`, { method: "POST" });
-      detail = result.detail;
-      toast(result.run.status === "failed" ? (result.run.error || "检查没有完成") : (result.run.summary || "检查完成"));
+  if (button.hasAttribute("data-remove-focus")) {
+    if (!detail?.watch?.scope) return;
+    const word = button.getAttribute("data-remove-focus");
+    const next = detail.watch.scope.focus.filter((item) => item !== word);
+    if (next.length < 1) {
+      toast("至少保留一个监测维度。");
+      return;
+    }
+    await act("focus", async () => {
+      detail = await api(`/api/watches/${encodeURIComponent(screen.id)}/focus`, { method: "POST", body: JSON.stringify({ focus: next }) });
     });
     return;
   }
+  if (button.hasAttribute("data-regen-focus")) {
+    await act("focus-regen", async () => {
+      detail = await api(`/api/watches/${encodeURIComponent(screen.id)}/focus`, { method: "POST", body: JSON.stringify({ regenerate: true }) });
+      toast("已按当前主题重新生成重点监测。");
+    });
+    return;
+  }
+  if (button.hasAttribute("data-check")) {
+    await runWatchCheck();
+    return;
+  }
   if (button.dataset.status) {
-    if (button.dataset.status === "ended" && !window.confirm("结束跟踪后，每天不再检查。已有的变化记录会留着。")) return;
+    menuOpen = false;
     const status = button.dataset.status;
+    if (status === "ended" && !window.confirm("结束跟踪后不再自动检查，记录会保留。你仍可在此查看或删除主题。")) return;
+    if (status === "paused" && !window.confirm("暂停后不会自动检查，可稍后在菜单中继续跟踪。")) return;
     await act("status", async () => {
       detail = await api(`/api/watches/${encodeURIComponent(screen.id)}/status`, { method: "POST", body: JSON.stringify({ status }) });
     });
@@ -425,6 +678,22 @@ async function onSubmit(event) {
     await act("idea", async () => { data = await api("/api/watches/ideas", { method: "POST", body: JSON.stringify({ text }) }); });
     return;
   }
+  if (form.id === "radar-focus-add") {
+    const add = String(new FormData(form).get("add") || "").trim();
+    if (add.length < 2) {
+      toast("监测维度至少 2 个字。");
+      return;
+    }
+    if (add.length > 16) {
+      toast("监测维度最多 16 个字。");
+      return;
+    }
+    await act("focus", async () => {
+      detail = await api(`/api/watches/${encodeURIComponent(screen.id)}/focus`, { method: "POST", body: JSON.stringify({ add }) });
+      form.reset();
+    });
+    return;
+  }
   if (form.id === "radar-theme") {
     const question = String(new FormData(form).get("question") || "").trim();
     if (question.length < 8) {
@@ -439,6 +708,82 @@ async function onSubmit(event) {
       editingTheme = false;
       toast("主题已更新。下一次检查会按新问题检索。");
     });
+  }
+}
+
+async function runWatchCheck() {
+  if (pending || (detail?.watch && isWatchChecking(detail.watch))) return;
+  pending = "check";
+  checkLive = { logs: [], thinking: "", tool: null };
+  detailTab = "snapshot";
+  menuOpen = false;
+  if (detail?.watch) {
+    detail = {
+      ...detail,
+      watch: {
+        ...detail.watch,
+        latestRun: { ...(detail.watch.latestRun || {}), status: "running", summary: "检查中…" },
+      },
+    };
+  }
+  paint();
+  try {
+    const result = await streamWatchCheck(screen.id);
+    detail = result.detail;
+    toast(result.run.status === "failed" ? (result.run.error || "检查没有完成") : (result.run.summary || "检查完成"));
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "检查没有完成");
+  } finally {
+    checkLive = null;
+    pending = "";
+    await load();
+  }
+}
+
+async function streamWatchCheck(id) {
+  const response = await fetch(`/api/watches/${encodeURIComponent(id)}/check`, {
+    method: "POST",
+    headers: { Accept: "text/event-stream" },
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || `HTTP ${response.status}`);
+  }
+  if (!response.body) throw new Error("检查流没有返回");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let donePayload = null;
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const blocks = buffer.split("\n\n");
+    buffer = blocks.pop() || "";
+    for (const block of blocks) {
+      const event = parseSseBlock(block);
+      if (!event) continue;
+      if (event.type === "delta" || event.type === "progress") ingestCheckProgress(event.data);
+      else if (event.type === "done") donePayload = event.data;
+      else if (event.type === "error") throw new Error(event.data.message || "检查失败");
+    }
+    if (done) break;
+  }
+  if (!donePayload) throw new Error("检查未正常结束");
+  return donePayload;
+}
+
+function parseSseBlock(block) {
+  let type = "message";
+  const data = [];
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event:")) type = line.slice(6).trim();
+    if (line.startsWith("data:")) data.push(line.slice(5).trim());
+  }
+  if (!data.length) return null;
+  try {
+    return { type, data: JSON.parse(data.join("\n")) };
+  } catch {
+    return null;
   }
 }
 

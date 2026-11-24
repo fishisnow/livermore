@@ -1,6 +1,13 @@
 import type { AppConfig } from "../config.js";
-import { draftFromHoldings, type HoldingRef } from "./draft.js";
+import { applyIdeaEnrichment, draftFromHoldings, draftFromIdea, type HoldingRef } from "./draft.js";
 import type { CandidateDraft } from "./types.js";
+
+export interface IdeaEnrichment {
+  rationale: string;
+  focus: string[];
+  symbols: string[];
+  sectors: string[];
+}
 
 export function modelConfigured(config: AppConfig): boolean {
   if (process.env.VITEST) return false;
@@ -13,12 +20,23 @@ export async function draftHoldingsWithModel(config: AppConfig, holdings: Holdin
   return payload ? draftsFromPayload(payload, holdings) : null;
 }
 
+export async function enrichUserIdeaWithModel(config: AppConfig, text: string): Promise<IdeaEnrichment | null> {
+  if (!modelConfigured(config)) return null;
+  const payload = await completeJson(config, "你是投资观察编辑。只输出 JSON，不要写文章。", ideaScopePrompt(text));
+  return parseIdeaScope(payload);
+}
+
+export async function buildUserIdeaDraft(config: AppConfig, text: string): Promise<CandidateDraft> {
+  let draft = draftFromIdea(text);
+  const enrichment = await enrichUserIdeaWithModel(config, text);
+  if (enrichment) draft = applyIdeaEnrichment(draft, enrichment);
+  return draft;
+}
+
+/** @deprecated 使用 buildUserIdeaDraft；保留问句原话并只用模型补 scope。 */
 export async function draftIdeaWithModel(config: AppConfig, text: string): Promise<CandidateDraft | null> {
   if (!modelConfigured(config)) return null;
-  const payload = await completeJson(config, "你是投资观察编辑。只输出 JSON，不要写文章。", ideaPrompt(text));
-  if (!payload || typeof payload !== "object") return null;
-  const drafts = draftsFromPayload({ watches: [payload] }, []);
-  return drafts?.[0] ?? null;
+  return buildUserIdeaDraft(config, text);
 }
 
 export async function completeJson(config: AppConfig, system: string, user: string): Promise<unknown | null> {
@@ -68,11 +86,32 @@ JSON 格式：{"watches":[{"question":"","rationale":"","focus":[""],"symbols":[
 symbols 只能来自上面的持仓。`;
 }
 
-function ideaPrompt(text: string): string {
-  return `把这句话收成一个调研主题，并标出相关公司、行业和判断变量。
-${THEME_RULES}
-原话：${text}
-JSON 格式：{"question":"","rationale":"","focus":[""],"symbols":[""],"sectors":[""]}`;
+function ideaScopePrompt(text: string): string {
+  return `用户写下了一段想持续跟踪的投资观察原话。不要改写、不要输出新问句；只理解他在验证什么预期，并抽出后续每天对照的监测维度。
+
+focus：判断该预期有没有变的公开变量，必须 2 到 4 个中文短词（例如实际利率、美元指数、ETF 资金流、央行购金），不要写成长句，也不要把整句观察拆进问句里。
+rationale：一句话说明在验证哪一个市场预期，30 字以内。
+symbols：相关上市公司或标的简称，最多 8 个；没有把握可输出空数组。
+sectors：相关行业标签，最多 3 个。
+
+原话：
+${text}
+
+JSON 格式：{"rationale":"","focus":[""],"symbols":[""],"sectors":[""]}`;
+}
+
+function parseIdeaScope(payload: unknown): IdeaEnrichment | null {
+  if (!payload || typeof payload !== "object") return null;
+  const row = payload as Record<string, unknown>;
+  const focus = shortList(row.focus, 4, 16);
+  if (focus.length < 2) return null;
+  const rationale = clip(typeof row.rationale === "string" ? row.rationale.trim() : "你写下的跟踪主题。确认后每天比较新证据与上次状态。", 80);
+  return {
+    rationale,
+    focus,
+    symbols: shortList(row.symbols, 8, 24),
+    sectors: shortList(row.sectors, 3, 16),
+  };
 }
 
 export function isResearchTheme(question: string): boolean {
